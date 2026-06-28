@@ -14,7 +14,7 @@ Priority tags:
 
 ## Phase 0 — Project Setup
 
-- [ ] `[infra]` Create GitHub repository named `transcodex`
+- [x] `[infra]` Create GitHub repository named `transcodex`
 - [x] `[infra]` Set up monorepo directory structure
   ```
   transcodex/
@@ -57,21 +57,21 @@ Priority tags:
 
 ## Phase 1 — Database and Infrastructure
 
-- [ ] `[core]` Write PostgreSQL schema migration file
+- [x] `[core]` Write PostgreSQL schema migration file
   - `jobs` table
     - includes stored `priority` so retries preserve queue ordering
   - `job_outputs` table
   - `workers` table
   - Indexes: `jobs(status)`, `jobs(updated_at)`, `workers(status, last_heartbeat)`
-- [ ] `[core]` Set up database migration tooling (golang-migrate or goose)
-- [ ] `[core]` Run migrations locally and verify schema
-- [ ] `[infra]` Configure MinIO in docker-compose
+- [x] `[core]` Set up database migration tooling (golang-migrate or goose)
+- [x] `[core]` Run migrations locally and verify schema
+- [x] `[infra]` Configure MinIO in docker-compose
   - Create default bucket on startup
   - Set access key and secret key via environment
-- [ ] `[infra]` Verify Redis is reachable and sorted set operations work locally
-- [ ] `[infra]` Write shared Go package for Postgres connection pool (`pgxpool`)
-- [ ] `[infra]` Write shared Go package for Redis client (`go-redis`)
-- [ ] `[infra]` Write shared Go package for MinIO / S3 client
+- [x] `[infra]` Verify Redis is reachable and sorted set operations work locally
+- [x] `[infra]` Write shared Go package for Postgres connection pool (`pgxpool`)
+- [x] `[infra]` Write shared Go package for Redis client (`go-redis`)
+- [x] `[infra]` Write shared Go package for MinIO / S3 client
 
 ---
 

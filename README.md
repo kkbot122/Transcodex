@@ -72,6 +72,37 @@ cp .env.example .env
 docker compose up
 ```
 
+### Phase 1 infrastructure
+
+Start only the local infrastructure:
+
+```bash
+docker compose up -d postgres redis minio minio-create-bucket
+```
+
+Run database migrations:
+
+```bash
+docker compose --profile tools run --rm migrate
+```
+
+Verify the schema:
+
+```bash
+docker compose exec postgres psql -U postgres -d transcodex -c "\dt"
+docker compose exec postgres psql -U postgres -d transcodex -c "\d jobs"
+docker compose exec postgres psql -U postgres -d transcodex -c "\d job_outputs"
+docker compose exec postgres psql -U postgres -d transcodex -c "\d workers"
+```
+
+Verify Redis sorted-set queue behavior:
+
+```bash
+docker compose exec redis redis-cli ZADD job_queue 100 '{"job_id":"demo-high","priority":100}'
+docker compose exec redis redis-cli ZADD job_queue 10 '{"job_id":"demo-low","priority":10}'
+docker compose exec redis redis-cli ZPOPMAX job_queue
+```
+
 Services:
 
 | Service | URL |

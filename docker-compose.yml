@@ -1,7 +1,8 @@
 services:
   api:
     build:
-      context: ./api
+      context: .
+      dockerfile: api/Dockerfile
     env_file:
       - path: .env.example
       - path: .env
@@ -18,7 +19,8 @@ services:
 
   worker:
     build:
-      context: ./worker
+      context: .
+      dockerfile: worker/Dockerfile
     env_file:
       - path: .env.example
       - path: .env
@@ -33,7 +35,8 @@ services:
 
   reaper:
     build:
-      context: ./reaper
+      context: .
+      dockerfile: reaper/Dockerfile
     env_file:
       - path: .env.example
       - path: .env
@@ -43,6 +46,24 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  migrate:
+    image: migrate/migrate:4
+    profiles:
+      - tools
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      [
+        "-path",
+        "/migrations",
+        "-database",
+        "postgres://postgres:postgres@postgres:5432/transcodex?sslmode=disable",
+        "up"
+      ]
 
   postgres:
     image: postgres:16-alpine
@@ -81,6 +102,21 @@ services:
       - "9001:9001"
     volumes:
       - minio_data:/data
+
+  minio-create-bucket:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        until mc alias set transcodex http://minio:9000 transcodex transcodex-secret; do
+          sleep 2
+        done
+        mc mb --ignore-existing transcodex/transcodex
+        mc anonymous set download transcodex/transcodex
 
 volumes:
   postgres_data:
