@@ -229,17 +229,17 @@ Priority tags:
 
 ## Phase 5 — Demo Frontend
 
-- [ ] `[feature]` Set up React + Vite project in `frontend/demo/`
-- [ ] `[feature]` Build `UploadForm` component — file picker + priority selector + upload button
-- [ ] `[feature]` On upload — call `POST /uploads`, store returned `job_id` in state
-- [ ] `[feature]` Build `JobStatus` component — poll `GET /jobs/{id}` every 3 seconds
-- [ ] `[feature]` Display job state with visual indicator (queued / processing / completed / dead)
-- [ ] `[feature]` Stop polling when status is `completed` or `dead`
-- [ ] `[feature]` Build `OutputLinks` component — render CDN URLs as clickable links when completed
-- [ ] `[feature]` Show thumbnail as preview image on completion
-- [ ] `[feature]` Handle error states — dead job, network error, 404
-- [ ] `[polish]` Add upload progress indicator
-- [ ] `[polish]` Show elapsed time since job was created
+- [x] `[feature]` Set up React + Vite project in `frontend/demo/`
+- [x] `[feature]` Build `UploadForm` component — file picker + priority selector + upload button
+- [x] `[feature]` On upload — call `POST /uploads`, store returned `job_id` in state
+- [x] `[feature]` Build `JobStatus` component — poll `GET /jobs/{id}` every 3 seconds
+- [x] `[feature]` Display job state with visual indicator (queued / processing / completed / dead)
+- [x] `[feature]` Stop polling when status is `completed` or `dead`
+- [x] `[feature]` Build `OutputLinks` component — render CDN URLs as clickable links when completed
+- [x] `[feature]` Show thumbnail as preview image on completion
+- [x] `[feature]` Handle error states — dead job, network error, 404
+- [x] `[polish]` Add upload progress indicator
+- [x] `[polish]` Show elapsed time since job was created
 
 ---
 
