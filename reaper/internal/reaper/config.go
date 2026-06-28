@@ -25,11 +25,17 @@ type Config struct {
 }
 
 func LoadConfig() Config {
+	sweepInterval := envSeconds("REAPER_SWEEP_INTERVAL", defaultSweepInterval)
+	leadershipLockTTL := envSeconds("REAPER_LEADERSHIP_LOCK_TTL_SECONDS", defaultLeadershipLockTTL)
+	if leadershipLockTTL <= sweepInterval {
+		leadershipLockTTL = sweepInterval * 2
+	}
+
 	return Config{
 		DatabaseURL:         os.Getenv("DATABASE_URL"),
 		RedisURL:            os.Getenv("REDIS_URL"),
-		SweepInterval:       envSeconds("REAPER_SWEEP_INTERVAL", defaultSweepInterval),
-		LeadershipLockTTL:   envSeconds("REAPER_LEADERSHIP_LOCK_TTL_SECONDS", defaultLeadershipLockTTL),
+		SweepInterval:       sweepInterval,
+		LeadershipLockTTL:   leadershipLockTTL,
 		DeadWorkerThreshold: envSeconds("REAPER_DEAD_WORKER_THRESHOLD_SECONDS", defaultDeadWorkerThreshold),
 		OrphanJobThreshold:  envSeconds("REAPER_ORPHAN_JOB_THRESHOLD_SECONDS", defaultOrphanJobThreshold),
 		StaleQueueThreshold: envSeconds("REAPER_STALE_QUEUE_THRESHOLD_SECONDS", defaultStaleQueueThreshold),

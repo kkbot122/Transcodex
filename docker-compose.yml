@@ -28,8 +28,6 @@ services:
       - path: .env
         required: false
     depends_on:
-      api:
-        condition: service_started
       migrate:
         condition: service_completed_successfully
       postgres:
@@ -128,12 +126,17 @@ services:
       - "9001:9001"
     volumes:
       - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   minio-create-bucket:
     image: minio/mc:latest
     depends_on:
       minio:
-        condition: service_started
+        condition: service_healthy
     entrypoint: /bin/sh
     command:
       - -c
