@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -74,7 +74,7 @@ func (w *Worker) Close() {
 }
 
 func (w *Worker) Run(stopPollingCtx context.Context, processCtx context.Context) {
-	log.Printf("worker %s started", w.id)
+	slog.Info("worker started", "worker_id", w.id)
 
 	heartbeatCtx, stopHeartbeat := context.WithCancel(processCtx)
 	heartbeatDone := make(chan struct{})
@@ -100,13 +100,13 @@ func (w *Worker) Run(stopPollingCtx context.Context, processCtx context.Context)
 			continue
 		}
 		if err != nil {
-			log.Printf("poll queue: %v", err)
+			slog.Error("poll queue", "worker_id", w.id, "error", err)
 			sleepOrDone(stopPollingCtx, w.config.PollBackoff)
 			continue
 		}
 
 		if err := w.processJob(processCtx, *msg); err != nil {
-			log.Printf("process job %s: %v", msg.JobID, err)
+			slog.Error("process job", "worker_id", w.id, "job_id", msg.JobID, "error", err)
 		}
 	}
 }
@@ -128,7 +128,7 @@ func (w *Worker) runHeartbeat(ctx context.Context) {
 	defer ticker.Stop()
 
 	if err := w.heartbeat(ctx); err != nil {
-		log.Printf("heartbeat: %v", err)
+		slog.Error("heartbeat", "worker_id", w.id, "error", err)
 	}
 
 	for {
@@ -137,7 +137,7 @@ func (w *Worker) runHeartbeat(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := w.heartbeat(ctx); err != nil {
-				log.Printf("heartbeat: %v", err)
+				slog.Error("heartbeat", "worker_id", w.id, "error", err)
 			}
 		}
 	}

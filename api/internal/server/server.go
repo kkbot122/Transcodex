@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -74,14 +74,7 @@ func (s *Server) Close() {
 func (s *Server) buildRouter() *gin.Engine {
 	router := gin.New()
 	router.Use(requestLogger(), cors.New(cors.Config{
-		AllowOrigins: []string{
-			"http://localhost:3000",
-			"http://127.0.0.1:3000",
-			"http://localhost:3001",
-			"http://127.0.0.1:3001",
-			"http://localhost:5173",
-			"http://127.0.0.1:5173",
-		},
+		AllowOrigins: s.config.CORSAllowedOrigins,
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
 		AllowHeaders: []string{"Content-Type", "Authorization"},
 	}), gin.CustomRecovery(recoveryHandler))
@@ -101,12 +94,17 @@ func requestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
-		log.Printf("%s %s %d %s", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), time.Since(start))
+		slog.Info("http request",
+			"method", c.Request.Method,
+			"path", c.Request.URL.Path,
+			"status", c.Writer.Status(),
+			"latency", time.Since(start),
+		)
 	}
 }
 
 func recoveryHandler(c *gin.Context, recovered any) {
-	log.Printf("panic recovered: %v", recovered)
+	slog.Error("panic recovered", "panic", recovered, "path", c.Request.URL.Path, "method", c.Request.Method)
 	c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
 

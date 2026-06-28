@@ -2,7 +2,7 @@ package reaper
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,7 +49,7 @@ func (r *Reaper) Close() {
 }
 
 func (r *Reaper) Run(ctx context.Context) {
-	log.Printf("reaper %s started", r.id)
+	slog.Info("reaper started", "reaper_id", r.id)
 	r.sweepWithLeadership(ctx)
 
 	ticker := time.NewTicker(r.config.SweepInterval)
@@ -58,7 +58,7 @@ func (r *Reaper) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("reaper %s stopped", r.id)
+			slog.Info("reaper stopped", "reaper_id", r.id)
 			return
 		case <-ticker.C:
 			r.sweepWithLeadership(ctx)
@@ -69,17 +69,17 @@ func (r *Reaper) Run(ctx context.Context) {
 func (r *Reaper) sweepWithLeadership(ctx context.Context) {
 	locked, err := r.acquireLeadership(ctx)
 	if err != nil {
-		log.Printf("acquire reaper leadership: %v", err)
+		slog.Error("acquire reaper leadership", "reaper_id", r.id, "error", err)
 		return
 	}
 	if !locked {
-		log.Printf("another reaper holds leadership, skipping sweep")
+		slog.Info("another reaper holds leadership, skipping sweep", "reaper_id", r.id)
 		return
 	}
 	defer r.releaseLeadership(context.Background())
 
 	if err := r.Sweep(ctx); err != nil {
-		log.Printf("sweep failed: %v", err)
+		slog.Error("sweep failed", "reaper_id", r.id, "error", err)
 	}
 }
 
@@ -95,6 +95,6 @@ end
 return 0
 `
 	if err := r.redis.Eval(ctx, script, []string{reaperLockKey}, r.id).Err(); err != nil {
-		log.Printf("release reaper leadership: %v", err)
+		slog.Error("release reaper leadership", "reaper_id", r.id, "error", err)
 	}
 }

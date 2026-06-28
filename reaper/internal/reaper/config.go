@@ -29,10 +29,10 @@ func LoadConfig() Config {
 		DatabaseURL:         os.Getenv("DATABASE_URL"),
 		RedisURL:            os.Getenv("REDIS_URL"),
 		SweepInterval:       envSeconds("REAPER_SWEEP_INTERVAL", defaultSweepInterval),
-		LeadershipLockTTL:   defaultLeadershipLockTTL,
-		DeadWorkerThreshold: defaultDeadWorkerThreshold,
-		OrphanJobThreshold:  defaultOrphanJobThreshold,
-		StaleQueueThreshold: defaultStaleQueueThreshold,
+		LeadershipLockTTL:   envSeconds("REAPER_LEADERSHIP_LOCK_TTL_SECONDS", defaultLeadershipLockTTL),
+		DeadWorkerThreshold: envSeconds("REAPER_DEAD_WORKER_THRESHOLD_SECONDS", defaultDeadWorkerThreshold),
+		OrphanJobThreshold:  envSeconds("REAPER_ORPHAN_JOB_THRESHOLD_SECONDS", defaultOrphanJobThreshold),
+		StaleQueueThreshold: envSeconds("REAPER_STALE_QUEUE_THRESHOLD_SECONDS", defaultStaleQueueThreshold),
 	}
 }
 

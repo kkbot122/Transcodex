@@ -2,17 +2,17 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/kisna/transcodex/api/internal/server"
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	config := server.LoadConfig()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -20,28 +20,30 @@ func main() {
 
 	app, err := server.New(ctx, config)
 	if err != nil {
-		log.Fatalf("start api: %v", err)
+		slog.Error("start api", "error", err)
+		os.Exit(1)
 	}
 	defer app.Close()
 
 	httpServer := &http.Server{
 		Addr:              config.Addr,
 		Handler:           app.Router(),
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: config.ReadHeaderTimeout,
 	}
 
 	go func() {
-		log.Printf("api listening on %s", config.Addr)
+		slog.Info("api listening", "addr", config.Addr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v", err)
+			slog.Error("listen", "addr", config.Addr, "error", err)
+			os.Exit(1)
 		}
 	}()
 
 	<-ctx.Done()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("shutdown api: %v", err)
+		slog.Error("shutdown api", "error", err)
 	}
 }

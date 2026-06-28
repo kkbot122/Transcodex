@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -148,17 +148,17 @@ func (r *Reaper) requeueJob(ctx context.Context, jobID string, reason string) er
 	job, err := r.fetchJob(ctx, jobID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			log.Printf("skip requeue missing job %s reason=%s", jobID, reason)
+			slog.Warn("skip requeue missing job", "reaper_id", r.id, "job_id", jobID, "reason", reason)
 			return nil
 		}
 		return err
 	}
 
-	if job.RetryCount >= job.MaxRetries {
+	if requeueActionFor(job) == requeueActionMarkDead {
 		if err := r.markDead(ctx, job.ID); err != nil {
 			return err
 		}
-		log.Printf("job %s marked dead reason=%s retry_count=%d max_retries=%d", job.ID, reason, job.RetryCount, job.MaxRetries)
+		slog.Error("job marked dead", "reaper_id", r.id, "job_id", job.ID, "reason", reason, "retry_count", job.RetryCount, "max_retries", job.MaxRetries)
 		return nil
 	}
 
@@ -204,8 +204,22 @@ func (r *Reaper) requeueJob(ctx context.Context, jobID string, reason string) er
 		return err
 	}
 
-	log.Printf("job %s requeued reason=%s retry_count=%d priority=%d", job.ID, reason, job.RetryCount+1, job.Priority)
+	slog.Info("job requeued", "reaper_id", r.id, "job_id", job.ID, "reason", reason, "retry_count", job.RetryCount+1, "priority", job.Priority)
 	return nil
+}
+
+type requeueAction string
+
+const (
+	requeueActionRequeue  requeueAction = "requeue"
+	requeueActionMarkDead requeueAction = "mark_dead"
+)
+
+func requeueActionFor(job Job) requeueAction {
+	if job.RetryCount >= job.MaxRetries {
+		return requeueActionMarkDead
+	}
+	return requeueActionRequeue
 }
 
 func (r *Reaper) fetchJob(ctx context.Context, jobID string) (Job, error) {

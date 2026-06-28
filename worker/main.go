@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,6 +12,7 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	config := worker.LoadConfig()
 
 	processCtx, cancelProcessing := context.WithCancel(context.Background())
@@ -19,7 +20,8 @@ func main() {
 
 	app, err := worker.New(processCtx, config)
 	if err != nil {
-		log.Fatalf("start worker: %v", err)
+		slog.Error("start worker", "error", err)
+		os.Exit(1)
 	}
 	defer app.Close()
 
@@ -38,7 +40,7 @@ func main() {
 	case <-done:
 		return
 	case sig := <-signals:
-		log.Printf("received %s, stopping poll loop and draining current job", sig)
+		slog.Info("received shutdown signal", "signal", sig.String())
 		stopPolling()
 	}
 
@@ -47,9 +49,9 @@ func main() {
 
 	select {
 	case <-done:
-		log.Printf("worker drained cleanly")
+		slog.Info("worker drained cleanly")
 	case <-drainTimer.C:
-		log.Printf("drain timeout reached, canceling current job")
+		slog.Warn("drain timeout reached, canceling current job", "timeout", config.ShutdownGracePeriod)
 		cancelProcessing()
 		<-done
 	}

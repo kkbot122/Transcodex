@@ -332,12 +332,12 @@ Priority tags:
 ## Phase 9 — Polish and Resume Prep
 
 ### Code quality
-- [ ] `[polish]` Add structured logging throughout (slog or zap)
-- [ ] `[polish]` Ensure all errors are logged with context (job_id, worker_id)
-- [ ] `[polish]` Remove all hardcoded values — everything via environment variables
-- [ ] `[polish]` Write Go unit tests for priority scoring logic
-- [ ] `[polish]` Write Go unit tests for retry / failure handler
-- [ ] `[polish]` Write Go unit tests for reaper requeue logic
+- [x] `[polish]` Add structured logging throughout (slog or zap)
+- [x] `[polish]` Ensure all errors are logged with context (job_id, worker_id)
+- [x] `[polish]` Remove all hardcoded values — everything via environment variables
+- [x] `[polish]` Write Go unit tests for priority scoring logic
+- [x] `[polish]` Write Go unit tests for retry / failure handler
+- [x] `[polish]` Write Go unit tests for reaper requeue logic
 
 ### Documentation
 - [ ] `[polish]` Write full `README.md`

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,6 +11,7 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	config := reaper.LoadConfig()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -18,7 +19,8 @@ func main() {
 
 	app, err := reaper.New(ctx, config)
 	if err != nil {
-		log.Fatalf("start reaper: %v", err)
+		slog.Error("start reaper", "error", err)
+		os.Exit(1)
 	}
 	defer app.Close()
 

@@ -13,6 +13,10 @@ const (
 	defaultLockTTL           = 5 * time.Minute
 	defaultShutdownGrace     = 30 * time.Second
 	defaultWorkerRetries     = 3
+	defaultTempDir           = ""
+	defaultOutputPrefix      = "outputs"
+	defaultOutputCache       = "public, max-age=86400, immutable"
+	defaultFFmpegPath        = "ffmpeg"
 )
 
 type Config struct {
@@ -23,6 +27,10 @@ type Config struct {
 	StorageAccessKey    string
 	StorageSecretKey    string
 	CDNBaseURL          string
+	TempDir             string
+	OutputPrefix        string
+	OutputCacheControl  string
+	FFmpegPath          string
 	HeartbeatInterval   time.Duration
 	PollBackoff         time.Duration
 	LockTTL             time.Duration
@@ -39,12 +47,23 @@ func LoadConfig() Config {
 		StorageAccessKey:    os.Getenv("STORAGE_ACCESS_KEY"),
 		StorageSecretKey:    os.Getenv("STORAGE_SECRET_KEY"),
 		CDNBaseURL:          strings.TrimRight(os.Getenv("CDN_BASE_URL"), "/"),
+		TempDir:             env("WORKER_TEMP_DIR", defaultTempDir),
+		OutputPrefix:        strings.Trim(env("OUTPUT_PREFIX", defaultOutputPrefix), "/"),
+		OutputCacheControl:  env("OUTPUT_CACHE_CONTROL", defaultOutputCache),
+		FFmpegPath:          env("FFMPEG_PATH", defaultFFmpegPath),
 		HeartbeatInterval:   envSeconds("WORKER_HEARTBEAT_INTERVAL", defaultHeartbeatInterval),
-		PollBackoff:         defaultPollBackoff,
-		LockTTL:             defaultLockTTL,
+		PollBackoff:         envSeconds("WORKER_POLL_BACKOFF_SECONDS", defaultPollBackoff),
+		LockTTL:             envSeconds("WORKER_LOCK_TTL_SECONDS", defaultLockTTL),
 		ShutdownGracePeriod: envSeconds("WORKER_SHUTDOWN_GRACE_SECONDS", defaultShutdownGrace),
 		WorkerMaxRetries:    envInt("WORKER_MAX_RETRIES", defaultWorkerRetries),
 	}
+}
+
+func env(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func envInt(key string, fallback int) int {

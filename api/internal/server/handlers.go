@@ -520,7 +520,7 @@ func (s *Server) storeUpload(ctx context.Context, jobID string, part *multipart.
 	if filename == "." || filename == string(filepath.Separator) || filename == "" {
 		filename = "input"
 	}
-	key := fmt.Sprintf("raw/%s/%s", jobID, filename)
+	key := fmt.Sprintf("%s/%s/%s", s.config.UploadPrefix, jobID, filename)
 	body := &sizeLimitedReader{
 		reader: io.MultiReader(bytes.NewReader(header), part),
 		limit:  s.config.UploadSizeLimit,

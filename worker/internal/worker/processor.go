@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,7 +29,7 @@ func (w *Worker) processJob(ctx context.Context, msg QueueMessage) error {
 		return fmt.Errorf("acquire lock: %w", err)
 	}
 	if !locked {
-		log.Printf("job %s already locked, skipping", msg.JobID)
+		slog.Info("job already locked, skipping", "worker_id", w.id, "job_id", msg.JobID)
 		return nil
 	}
 	defer w.releaseLock(context.Background(), msg.JobID)
@@ -49,7 +49,7 @@ func (w *Worker) processJob(ctx context.Context, msg QueueMessage) error {
 	}
 	defer func() {
 		if err := w.setWorkerIdle(context.Background()); err != nil {
-			log.Printf("set worker idle: %v", err)
+			slog.Error("set worker idle", "worker_id", w.id, "job_id", msg.JobID, "error", err)
 		}
 	}()
 
@@ -62,13 +62,17 @@ func (w *Worker) processJob(ctx context.Context, msg QueueMessage) error {
 }
 
 func (w *Worker) runJob(ctx context.Context, msg QueueMessage) error {
-	workDir := filepath.Join(os.TempDir(), msg.JobID)
+	tempRoot := w.config.TempDir
+	if tempRoot == "" {
+		tempRoot = os.TempDir()
+	}
+	workDir := filepath.Join(tempRoot, msg.JobID)
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return fmt.Errorf("create work dir: %w", err)
 	}
 	defer func() {
 		if err := os.RemoveAll(workDir); err != nil {
-			log.Printf("cleanup %s: %v", workDir, err)
+			slog.Error("cleanup work dir", "worker_id", w.id, "job_id", msg.JobID, "work_dir", workDir, "error", err)
 		}
 	}()
 
@@ -77,7 +81,7 @@ func (w *Worker) runJob(ctx context.Context, msg QueueMessage) error {
 		return err
 	}
 
-	outputs, err := runFFmpegJobs(ctx, inputPath, workDir)
+	outputs, err := runFFmpegJobs(ctx, w.config.FFmpegPath, inputPath, workDir)
 	if err != nil {
 		return err
 	}
@@ -90,7 +94,7 @@ func (w *Worker) runJob(ctx context.Context, msg QueueMessage) error {
 		return err
 	}
 
-	log.Printf("job %s completed", msg.JobID)
+	slog.Info("job completed", "worker_id", w.id, "job_id", msg.JobID)
 	return nil
 }
 
@@ -106,7 +110,7 @@ end
 return 0
 `
 	if err := w.redis.Eval(ctx, script, []string{lockKey(jobID)}, w.id).Err(); err != nil {
-		log.Printf("release lock for job %s: %v", jobID, err)
+		slog.Error("release job lock", "worker_id", w.id, "job_id", jobID, "error", err)
 	}
 }
 
@@ -167,7 +171,7 @@ func (w *Worker) downloadInput(ctx context.Context, key string, destination stri
 	return nil
 }
 
-func runFFmpegJobs(ctx context.Context, inputPath string, workDir string) ([]Output, error) {
+func runFFmpegJobs(ctx context.Context, ffmpegPath string, inputPath string, workDir string) ([]Output, error) {
 	tasks := []ffmpegTask{
 		{
 			OutputType:  outputType360,
@@ -213,7 +217,7 @@ func runFFmpegJobs(ctx context.Context, inputPath string, workDir string) ([]Out
 		go func() {
 			defer wg.Done()
 			outputPath := filepath.Join(workDir, task.FileName)
-			if err := runFFmpeg(ctx, task.Args(inputPath, outputPath)); err != nil {
+			if err := runFFmpeg(ctx, ffmpegPath, task.Args(inputPath, outputPath)); err != nil {
 				errs[i] = fmt.Errorf("%s: %w", task.OutputType, err)
 				return
 			}
@@ -240,9 +244,9 @@ func runFFmpegJobs(ctx context.Context, inputPath string, workDir string) ([]Out
 	return outputs, nil
 }
 
-func runFFmpeg(ctx context.Context, args []string) error {
+func runFFmpeg(ctx context.Context, ffmpegPath string, args []string) error {
 	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
@@ -257,7 +261,7 @@ func (w *Worker) uploadOutputs(ctx context.Context, jobID string, outputs []Outp
 		i := i
 		group.Go(func() error {
 			output := &outputs[i]
-			key := fmt.Sprintf("outputs/%s/%s", jobID, output.Type)
+			key := fmt.Sprintf("%s/%s/%s", w.config.OutputPrefix, jobID, output.Type)
 			file, err := os.Open(output.LocalPath)
 			if err != nil {
 				return fmt.Errorf("open output %s: %w", output.Type, err)
@@ -266,7 +270,7 @@ func (w *Worker) uploadOutputs(ctx context.Context, jobID string, outputs []Outp
 
 			_, err = w.storage.PutObject(ctx, w.storage.Bucket, key, file, output.FileSize, minio.PutObjectOptions{
 				ContentType:  output.ContentType,
-				CacheControl: "public, max-age=86400, immutable",
+				CacheControl: w.config.OutputCacheControl,
 			})
 			if err != nil {
 				return fmt.Errorf("upload output %s: %w", output.Type, err)
@@ -320,29 +324,43 @@ func (w *Worker) completeJob(ctx context.Context, jobID string, outputs []Output
 }
 
 func (w *Worker) handleFailure(ctx context.Context, jobID string, cause error) {
-	log.Printf("job %s failed: %v", jobID, cause)
+	slog.Error("job failed", "worker_id", w.id, "job_id", jobID, "error", cause)
 
 	job, err := w.fetchJob(ctx, jobID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			log.Printf("job %s disappeared before failure handling", jobID)
+			slog.Warn("job disappeared before failure handling", "worker_id", w.id, "job_id", jobID)
 			return
 		}
-		log.Printf("fetch failed job %s: %v", jobID, err)
+		slog.Error("fetch failed job", "worker_id", w.id, "job_id", jobID, "error", err)
 		return
 	}
 
-	if job.RetryCount >= job.MaxRetries {
+	if failureActionFor(job) == failureActionMarkDead {
 		if err := w.markDead(ctx, job.ID); err != nil {
-			log.Printf("mark job %s dead: %v", job.ID, err)
+			slog.Error("mark job dead", "worker_id", w.id, "job_id", job.ID, "error", err)
 		}
-		log.Printf("job %s permanently failed", job.ID)
+		slog.Error("job permanently failed", "worker_id", w.id, "job_id", job.ID, "retry_count", job.RetryCount, "max_retries", job.MaxRetries)
 		return
 	}
 
 	if err := w.requeueJob(ctx, job); err != nil {
-		log.Printf("requeue job %s: %v", job.ID, err)
+		slog.Error("requeue job", "worker_id", w.id, "job_id", job.ID, "error", err)
 	}
+}
+
+type failureAction string
+
+const (
+	failureActionRequeue  failureAction = "requeue"
+	failureActionMarkDead failureAction = "mark_dead"
+)
+
+func failureActionFor(job Job) failureAction {
+	if job.RetryCount >= job.MaxRetries {
+		return failureActionMarkDead
+	}
+	return failureActionRequeue
 }
 
 func (w *Worker) fetchJob(ctx context.Context, jobID string) (Job, error) {
