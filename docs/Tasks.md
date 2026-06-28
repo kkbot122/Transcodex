@@ -141,57 +141,57 @@ Priority tags:
 ## Phase 3 — Worker
 
 ### Setup
-- [ ] `[core]` Set up worker binary in `worker/`
-- [ ] `[core]` Register worker row in Postgres on startup (status = idle)
-- [ ] `[core]` Handle SIGTERM gracefully — start bounded drain, finish current job if possible, otherwise cancel context and let reaper recover
+- [x] `[core]` Set up worker binary in `worker/`
+- [x] `[core]` Register worker row in Postgres on startup (status = idle)
+- [x] `[core]` Handle SIGTERM gracefully — start bounded drain, finish current job if possible, otherwise cancel context and let reaper recover
 
 ### Heartbeat
-- [ ] `[core]` Start heartbeat goroutine on worker startup
-- [ ] `[core]` Update `workers.last_heartbeat` every 10 seconds
-- [ ] `[core]` Stop heartbeat goroutine cleanly on context cancel
+- [x] `[core]` Start heartbeat goroutine on worker startup
+- [x] `[core]` Update `workers.last_heartbeat` every 10 seconds
+- [x] `[core]` Stop heartbeat goroutine cleanly on context cancel
 
 ### Poll loop
-- [ ] `[core]` Poll Redis sorted set with `ZPOPMAX job_queue`
-- [ ] `[core]` Sleep 2 seconds on empty queue before retrying
-- [ ] `[core]` Pass message to job processor on receipt
+- [x] `[core]` Poll Redis sorted set with `ZPOPMAX job_queue`
+- [x] `[core]` Sleep 2 seconds on empty queue before retrying
+- [x] `[core]` Pass message to job processor on receipt
 
 ### Lock
-- [ ] `[core]` Acquire Redis lock — `SET lock:job:{id} {worker_id} NX EX 300`
-- [ ] `[core]` Skip job silently if lock not acquired
-- [ ] `[core]` Release lock on job completion or failure (`DEL lock:job:{id}`)
+- [x] `[core]` Acquire Redis lock — `SET lock:job:{id} {worker_id} NX EX 300`
+- [x] `[core]` Skip job silently if lock not acquired
+- [x] `[core]` Release lock on job completion or failure (`DEL lock:job:{id}`)
 
 ### Job processing
-- [ ] `[core]` Update job status — `processing` — with `AND status='queued'` guard
-- [ ] `[core]` Update worker row — `status = busy`, `current_job = job_id`
-- [ ] `[core]` Download raw file from MinIO/S3 to `/tmp/{job_id}/raw.mp4`
-- [ ] `[core]` Create output directory `/tmp/{job_id}/`
-- [ ] `[core]` Defer `os.RemoveAll(/tmp/{job_id}/)` immediately after directory creation
+- [x] `[core]` Update job status — `processing` — with `AND status='queued'` guard
+- [x] `[core]` Update worker row — `status = busy`, `current_job = job_id`
+- [x] `[core]` Download raw file from MinIO/S3 to `/tmp/{job_id}/raw.mp4`
+- [x] `[core]` Create output directory `/tmp/{job_id}/`
+- [x] `[core]` Defer `os.RemoveAll(/tmp/{job_id}/)` immediately after directory creation
 
 ### FFmpeg transcoding
-- [ ] `[core]` Run FFmpeg 360p transcode subprocess
-- [ ] `[core]` Run FFmpeg 720p transcode subprocess
-- [ ] `[core]` Run FFmpeg 1080p transcode subprocess
-- [ ] `[core]` Run FFmpeg thumbnail extraction subprocess
-- [ ] `[core]` Run all four subprocesses in parallel via `sync.WaitGroup` + goroutines
-- [ ] `[core]` Use `exec.CommandContext` so subprocesses respect context cancellation
-- [ ] `[core]` Capture FFmpeg stderr for error logging
-- [ ] `[core]` Fail entire job if any single subprocess fails
+- [x] `[core]` Run FFmpeg 360p transcode subprocess
+- [x] `[core]` Run FFmpeg 720p transcode subprocess
+- [x] `[core]` Run FFmpeg 1080p transcode subprocess
+- [x] `[core]` Run FFmpeg thumbnail extraction subprocess
+- [x] `[core]` Run all four subprocesses in parallel via `sync.WaitGroup` + goroutines
+- [x] `[core]` Use `exec.CommandContext` so subprocesses respect context cancellation
+- [x] `[core]` Capture FFmpeg stderr for error logging
+- [x] `[core]` Fail entire job if any single subprocess fails
 
 ### Output upload
-- [ ] `[core]` Upload each output file to MinIO/S3 under `outputs/{job_id}/{type}`
-- [ ] `[core]` Run all uploads in parallel via goroutines
-- [ ] `[core]` Build CDN URL for each output using `CDN_BASE_URL` env var
+- [x] `[core]` Upload each output file to MinIO/S3 under `outputs/{job_id}/{type}`
+- [x] `[core]` Run all uploads in parallel via goroutines
+- [x] `[core]` Build CDN URL for each output using `CDN_BASE_URL` env var
 
 ### Job completion
-- [ ] `[core]` Write JobOutput rows to Postgres — one per output type (upsert)
-- [ ] `[core]` Update job status to `completed`
-- [ ] `[core]` Update worker row — `status = idle`, `current_job = null`
+- [x] `[core]` Write JobOutput rows to Postgres — one per output type (upsert)
+- [x] `[core]` Update job status to `completed`
+- [x] `[core]` Update worker row — `status = idle`, `current_job = null`
 
 ### Failure handling
-- [ ] `[core]` On any step failure — call `handleFailure(jobID, err)`
-- [ ] `[core]` In `handleFailure` — check `retry_count` vs `max_retries`
-- [ ] `[core]` If retries remaining — increment `retry_count`, set `status = queued`, requeue to Redis using stored priority
-- [ ] `[core]` If retries exhausted — set `status = dead`, log permanently failed
+- [x] `[core]` On any step failure — call `handleFailure(jobID, err)`
+- [x] `[core]` In `handleFailure` — check `retry_count` vs `max_retries`
+- [x] `[core]` If retries remaining — increment `retry_count`, set `status = queued`, requeue to Redis using stored priority
+- [x] `[core]` If retries exhausted — set `status = dead`, log permanently failed
 
 ---
 
