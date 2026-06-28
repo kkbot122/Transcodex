@@ -3,7 +3,6 @@ package reaper
 import "time"
 
 const (
-	queueName     = "job_queue"
 	reaperLockKey = "reaper_lock"
 
 	statusQueued = "queued"

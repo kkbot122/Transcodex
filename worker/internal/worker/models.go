@@ -3,8 +3,6 @@ package worker
 import "time"
 
 const (
-	queueName = "job_queue"
-
 	statusQueued     = "queued"
 	statusProcessing = "processing"
 	statusCompleted  = "completed"

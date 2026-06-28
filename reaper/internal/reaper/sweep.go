@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/kisna/transcodex/pkg/queue"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -141,23 +141,7 @@ func (r *Reaper) recoverMissingQueueMessages(ctx context.Context) error {
 }
 
 func (r *Reaper) queueContainsJob(ctx context.Context, jobID string) (bool, error) {
-	var cursor uint64
-	pattern := "*" + jobID + "*"
-	for {
-		values, nextCursor, err := r.redis.ZScan(ctx, queueName, cursor, pattern, 100).Result()
-		if err != nil {
-			return false, err
-		}
-		for i := 0; i < len(values); i += 2 {
-			if strings.Contains(values[i], jobID) {
-				return true, nil
-			}
-		}
-		if nextCursor == 0 {
-			return false, nil
-		}
-		cursor = nextCursor
-	}
+	return r.redis.SIsMember(ctx, queue.QueuedJobsSet, jobID).Result()
 }
 
 func (r *Reaper) requeueJob(ctx context.Context, jobID string, reason string) error {
@@ -206,10 +190,13 @@ func (r *Reaper) requeueJob(ctx context.Context, jobID string, reason string) er
 		return err
 	}
 
-	if err := r.redis.ZAdd(ctx, queueName, redis.Z{
-		Score:  priorityScore(job.Priority, enqueuedAt),
+	pipe := r.redis.TxPipeline()
+	pipe.ZAdd(ctx, queue.Name, redis.Z{
+		Score:  queue.PriorityScore(job.Priority, enqueuedAt),
 		Member: payload,
-	}).Err(); err != nil {
+	})
+	pipe.SAdd(ctx, queue.QueuedJobsSet, job.ID)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
 
@@ -238,8 +225,4 @@ func (r *Reaper) markDead(ctx context.Context, jobID string) error {
 		WHERE id = $1
 	`, jobID)
 	return err
-}
-
-func priorityScore(priority int, enqueuedAt time.Time) float64 {
-	return float64(priority)*1_000_000_000_000_000 - float64(enqueuedAt.UnixMilli())
 }

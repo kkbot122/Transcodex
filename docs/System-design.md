@@ -61,7 +61,7 @@ Real world analogy: a self-hosted, simplified AWS MediaConvert or Cloudinary vid
 4. **Thumbnail generation** — extract a thumbnail at a fixed timestamp
 5. **Job status tracking** — caller polls `/jobs/{id}` to check state and retrieve output URLs on completion
 6. **CDN delivery** — processed files and thumbnails served via CDN
-7. **Retry on failure** — failed jobs retried up to N times before marked dead
+7. **Retry on failure** — processing errors are retried up to N times before the job is marked dead
 8. **Observability dashboard** — live view of queue depth, job states, worker utilization
 
 **Explicit out of scope:**
@@ -79,7 +79,7 @@ Real world analogy: a self-hosted, simplified AWS MediaConvert or Cloudinary vid
 | Reliability | A job must not be lost even if a worker crashes mid-processing |
 | Fault tolerance | Worker failure must not affect other jobs in the queue |
 | Scalability | Workers must be horizontally scalable |
-| Idempotency | Retrying a failed job must not produce duplicate outputs |
+| Idempotency | Retrying a job must not produce duplicate outputs |
 | Durability | Processed files and job metadata must persist beyond worker lifecycle |
 | Observability | System internals must be inspectable without touching the DB directly |
 | Low coupling | Upload API and workers must be independently deployable |
@@ -370,14 +370,18 @@ Postgres write before Redis push — crash safety. If Redis push fails, reaper d
 
 **Priority scoring:**
 ```go
-func priorityScore(priority int) float64 {
-    base := float64(priority * 1_000_000)
-    tiebreak := float64(math.MaxInt64 - time.Now().UnixNano())
-    return base + tiebreak
+func PriorityScore(priority int, enqueuedAt time.Time) float64 {
+    return float64(priority)*1_000_000_000_000_000 - float64(enqueuedAt.UnixMilli())
 }
 ```
 
-Higher priority wins. Within same priority, older jobs win (FIFO).
+Higher priority wins. Within same priority, older jobs win (FIFO). The function lives in `pkg/queue` so API enqueue, worker requeue, and reaper repair all use the same formula.
+
+**Redis queue indexes:**
+- `job_queue` sorted set stores serialized queue messages scored by priority
+- `queued_jobs` set stores job IDs currently expected in the queue
+
+Workers remove a job ID from `queued_jobs` after `ZPOPMAX`. The reaper checks `SISMEMBER queued_jobs {job_id}` instead of scanning the sorted set.
 
 **Connection pools:**
 - Postgres: `pgxpool`, max 20 connections
@@ -494,7 +498,7 @@ SELECT * FROM jobs
 WHERE status = 'queued'
 AND updated_at < now() - interval '30 seconds'
 ```
-For each candidate, check whether `job_id` exists in the Redis sorted set. If missing, push a new QueueMessage using the job's stored `priority`.
+For each candidate, check whether `job_id` exists in the Redis `queued_jobs` set. If missing, push a new QueueMessage using the job's stored `priority` and add the ID back to `queued_jobs`.
 
 **Requeue logic:**
 - If `retry_count >= max_retries` → mark `dead`

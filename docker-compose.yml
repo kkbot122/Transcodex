@@ -116,7 +116,7 @@ services:
           sleep 2
         done
         mc mb --ignore-existing transcodex/transcodex
-        mc anonymous set download transcodex/transcodex
+        mc anonymous set download transcodex/transcodex/outputs
 
 volumes:
   postgres_data:

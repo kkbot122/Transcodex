@@ -45,7 +45,7 @@ export default function App() {
   const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const elapsedLabel = useElapsedTime(job?.created_at);
+  const elapsedLabel = useElapsedTime(job?.created_at, job?.updated_at, job ? terminalStatuses.has(job.status) : false);
 
   useEffect(() => {
     if (!job || terminalStatuses.has(job.status)) {
@@ -304,22 +304,23 @@ function ProgressRail({ status }: { status: JobStatus }) {
   );
 }
 
-function useElapsedTime(startedAt?: string) {
+function useElapsedTime(startedAt?: string, stoppedAt?: string, stopped = false) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!startedAt) {
+    if (!startedAt || stopped) {
       return;
     }
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
-  }, [startedAt]);
+  }, [startedAt, stopped]);
 
   if (!startedAt) {
     return "-";
   }
 
-  const elapsedSeconds = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
+  const endTime = stopped && stoppedAt ? new Date(stoppedAt).getTime() : now;
+  const elapsedSeconds = Math.max(0, Math.floor((endTime - new Date(startedAt).getTime()) / 1000));
   if (elapsedSeconds < 60) {
     return `${elapsedSeconds}s`;
   }

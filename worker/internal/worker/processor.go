@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/kisna/transcodex/pkg/queue"
 	"github.com/minio/minio-go/v7"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
@@ -301,8 +302,7 @@ func (w *Worker) completeJob(ctx context.Context, jobID string, outputs []Output
 			VALUES ($1, $2, $3, $4)
 			ON CONFLICT (job_id, type) DO UPDATE
 			SET cdn_url = EXCLUDED.cdn_url,
-				file_size = EXCLUDED.file_size,
-				created_at = now()
+				file_size = EXCLUDED.file_size
 		`, jobID, output.Type, output.CDNURL, output.FileSize); err != nil {
 			return err
 		}
@@ -393,7 +393,10 @@ func (w *Worker) requeueJob(ctx context.Context, job Job) error {
 		return err
 	}
 
-	if err := w.redis.ZAdd(ctx, queueName, redisZ(priorityScore(job.Priority, enqueuedAt), payload)).Err(); err != nil {
+	pipe := w.redis.TxPipeline()
+	pipe.ZAdd(ctx, queue.Name, redisZ(queue.PriorityScore(job.Priority, enqueuedAt), payload))
+	pipe.SAdd(ctx, queue.QueuedJobsSet, job.ID)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
 
@@ -402,8 +405,4 @@ func (w *Worker) requeueJob(ctx context.Context, job Job) error {
 
 func redisZ(score float64, member []byte) redis.Z {
 	return redis.Z{Score: score, Member: member}
-}
-
-func priorityScore(priority int, enqueuedAt time.Time) float64 {
-	return float64(priority)*1_000_000_000_000_000 - float64(enqueuedAt.UnixMilli())
 }

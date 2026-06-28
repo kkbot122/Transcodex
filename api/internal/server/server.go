@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kisna/transcodex/pkg/postgres"
@@ -72,7 +73,16 @@ func (s *Server) Close() {
 
 func (s *Server) buildRouter() *gin.Engine {
 	router := gin.New()
-	router.Use(requestLogger(), gin.CustomRecovery(recoveryHandler))
+	router.Use(requestLogger(), cors.New(cors.Config{
+		AllowOrigins: []string{
+			"http://localhost:3000",
+			"http://127.0.0.1:3000",
+			"http://localhost:5173",
+			"http://127.0.0.1:5173",
+		},
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
+		AllowHeaders: []string{"Content-Type", "Authorization"},
+	}), gin.CustomRecovery(recoveryHandler))
 
 	router.POST("/uploads", s.upload)
 	router.GET("/jobs/:id", s.getJob)

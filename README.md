@@ -12,7 +12,7 @@ Built as a backend infrastructure service. Any application can integrate via a s
 - Transcodes to 360p, 720p, and 1080p in parallel
 - Extracts a thumbnail
 - Tracks job state through a full lifecycle — queued → processing → completed or dead
-- Retries failed jobs automatically, recovers from worker crashes
+- Retries processing errors automatically, recovers from worker crashes
 - Serves processed files via CDN
 - Exposes a live observability dashboard
 
@@ -42,7 +42,7 @@ API Server (Go)
                        Client
 ```
 
-A reaper process sweeps every 30 seconds to detect dead workers, orphaned jobs, and queued jobs missing from Redis, requeuing them automatically.
+A reaper process sweeps every 30 seconds to detect dead workers, orphaned jobs, and queued jobs missing from Redis, requeuing them automatically. Job status is one of `queued`, `processing`, `completed`, or `dead`.
 
 ---
 
@@ -51,7 +51,7 @@ A reaper process sweeps every 30 seconds to detect dead workers, orphaned jobs, 
 | Layer | Technology |
 |---|---|
 | API + Workers + Reaper | Go |
-| Queue | Redis (sorted set, priority-based) |
+| Queue | Redis sorted set for priority ordering plus `queued_jobs` set for O(1) membership checks |
 | Database | PostgreSQL |
 | Transcoding | FFmpeg |
 | Object storage | MinIO (local) / S3 (cloud) |
@@ -99,7 +99,9 @@ Verify Redis sorted-set queue behavior:
 
 ```bash
 docker compose exec redis redis-cli ZADD job_queue 100 '{"job_id":"demo-high","priority":100}'
+docker compose exec redis redis-cli SADD queued_jobs demo-high
 docker compose exec redis redis-cli ZADD job_queue 10 '{"job_id":"demo-low","priority":10}'
+docker compose exec redis redis-cli SADD queued_jobs demo-low
 docker compose exec redis redis-cli ZPOPMAX job_queue
 ```
 
@@ -111,6 +113,8 @@ Services:
 | Demo frontend | http://localhost:3000 |
 | Observability dashboard | http://localhost:3001 |
 | MinIO console | http://localhost:9001 |
+
+Local MinIO only enables anonymous downloads for the `outputs/` prefix. Raw uploads under `raw/` are not public.
 
 Scale workers:
 

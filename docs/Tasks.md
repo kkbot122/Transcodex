@@ -191,7 +191,7 @@ Priority tags:
 - [x] `[core]` On any step failure — call `handleFailure(jobID, err)`
 - [x] `[core]` In `handleFailure` — check `retry_count` vs `max_retries`
 - [x] `[core]` If retries remaining — increment `retry_count`, set `status = queued`, requeue to Redis using stored priority
-- [x] `[core]` If retries exhausted — set `status = dead`, log permanently failed
+- [x] `[core]` If retries exhausted — set `status = dead`, log permanent failure
 
 ---
 

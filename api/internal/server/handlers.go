@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/kisna/transcodex/pkg/queue"
 	"github.com/minio/minio-go/v7"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
@@ -285,7 +286,7 @@ func (s *Server) collectStats(ctx context.Context) (Stats, error) {
 
 	group, ctx := errgroup.WithContext(ctx)
 	group.Go(func() error {
-		depth, err := s.redis.ZCard(ctx, queueName).Result()
+		depth, err := s.redis.ZCard(ctx, queue.Name).Result()
 		if err == nil {
 			stats.QueueDepth = depth
 		}
@@ -364,10 +365,13 @@ func (s *Server) createQueuedJob(ctx context.Context, jobID, inputFile string, p
 		return err
 	}
 
-	if err := s.redis.ZAdd(ctx, queueName, redis.Z{
-		Score:  priorityScore(priority, enqueuedAt),
+	pipe := s.redis.TxPipeline()
+	pipe.ZAdd(ctx, queue.Name, redis.Z{
+		Score:  queue.PriorityScore(priority, enqueuedAt),
 		Member: payload,
-	}).Err(); err != nil {
+	})
+	pipe.SAdd(ctx, queue.QueuedJobsSet, jobID)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
 
@@ -591,8 +595,4 @@ func isValidJobStatus(status string) bool {
 	default:
 		return false
 	}
-}
-
-func priorityScore(priority int, enqueuedAt time.Time) float64 {
-	return float64(priority)*1_000_000_000_000_000 - float64(enqueuedAt.UnixMilli())
 }

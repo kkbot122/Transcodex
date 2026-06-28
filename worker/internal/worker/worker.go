@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kisna/transcodex/pkg/postgres"
+	"github.com/kisna/transcodex/pkg/queue"
 	redisclient "github.com/kisna/transcodex/pkg/redis"
 	"github.com/kisna/transcodex/pkg/storage"
 	"github.com/redis/go-redis/v9"
@@ -152,7 +153,7 @@ func (w *Worker) heartbeat(ctx context.Context) error {
 }
 
 func (w *Worker) poll(ctx context.Context) (*QueueMessage, error) {
-	items, err := w.redis.ZPopMax(ctx, queueName, 1).Result()
+	items, err := w.redis.ZPopMax(ctx, queue.Name, 1).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -167,6 +168,9 @@ func (w *Worker) poll(ctx context.Context) (*QueueMessage, error) {
 
 	var msg QueueMessage
 	if err := json.Unmarshal([]byte(member), &msg); err != nil {
+		return nil, err
+	}
+	if err := w.redis.SRem(ctx, queue.QueuedJobsSet, msg.JobID).Err(); err != nil {
 		return nil, err
 	}
 	return &msg, nil
