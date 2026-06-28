@@ -8,12 +8,14 @@ services:
       - path: .env
         required: false
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_started
+      minio-create-bucket:
+        condition: service_completed_successfully
     ports:
       - "8080:8080"
 
@@ -26,12 +28,16 @@ services:
       - path: .env
         required: false
     depends_on:
+      api:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_started
+      minio-create-bucket:
+        condition: service_completed_successfully
 
   reaper:
     build:
@@ -42,15 +48,35 @@ services:
       - path: .env
         required: false
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
 
+  demo:
+    build:
+      context: .
+      dockerfile: frontend/demo/Dockerfile
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "3000:80"
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: frontend/dashboard/Dockerfile
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "3001:80"
+
   migrate:
     image: migrate/migrate:4
-    profiles:
-      - tools
     depends_on:
       postgres:
         condition: service_healthy

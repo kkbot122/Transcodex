@@ -262,20 +262,20 @@ Priority tags:
 
 ## Phase 7 — Docker Compose Integration
 
-- [ ] `[infra]` Write `Dockerfile` for API server (multi-stage Go build)
-- [ ] `[infra]` Write `Dockerfile` for Worker (multi-stage Go build, include FFmpeg)
-- [ ] `[infra]` Write `Dockerfile` for Reaper (multi-stage Go build)
-- [ ] `[infra]` Write `Dockerfile` for demo frontend (Vite build + Nginx serve)
-- [ ] `[infra]` Write `Dockerfile` for dashboard frontend (Vite build + Nginx serve)
-- [ ] `[infra]` Complete `docker-compose.yml`
+- [x] `[infra]` Write `Dockerfile` for API server (multi-stage Go build)
+- [x] `[infra]` Write `Dockerfile` for Worker (multi-stage Go build, include FFmpeg)
+- [x] `[infra]` Write `Dockerfile` for Reaper (multi-stage Go build)
+- [x] `[infra]` Write `Dockerfile` for demo frontend (Vite build + Nginx serve)
+- [x] `[infra]` Write `Dockerfile` for dashboard frontend (Vite build + Nginx serve)
+- [x] `[infra]` Complete `docker-compose.yml`
   - All services with correct env vars
   - Postgres with healthcheck
   - Redis with healthcheck
   - MinIO with bucket init script
   - Worker with `depends_on` API, Redis, Postgres
   - Worker scalable via `docker compose up --scale worker=3`
-- [ ] `[infra]` Verify `docker compose up` brings full system online
-- [ ] `[infra]` Verify end to end — upload via demo frontend, watch job complete, view outputs
+- [x] `[infra]` Verify `docker compose up` brings full system online
+- [x] `[infra]` Verify end to end — upload via demo frontend, watch job complete, view outputs
 
 ---
 
