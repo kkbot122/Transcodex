@@ -198,32 +198,32 @@ Priority tags:
 ## Phase 4 — Reaper
 
 ### Setup
-- [ ] `[core]` Set up reaper binary in `reaper/` (or sidecar goroutine in API server)
-- [ ] `[core]` Start tick loop — sweep every 30 seconds
-- [ ] `[core]` Handle context cancellation cleanly
+- [x] `[core]` Set up reaper binary in `reaper/` (or sidecar goroutine in API server)
+- [x] `[core]` Start tick loop — sweep every 30 seconds
+- [x] `[core]` Handle context cancellation cleanly
 
 ### Dead worker detection
-- [ ] `[core]` Query workers where `status = busy AND last_heartbeat < now - 30s`
-- [ ] `[core]` Mark each dead worker — `status = dead`, `current_job = null`
-- [ ] `[core]` Call `requeueJob` for each dead worker's current job
+- [x] `[core]` Query workers where `status = busy AND last_heartbeat < now - 30s`
+- [x] `[core]` Mark each dead worker — `status = dead`, `current_job = null`
+- [x] `[core]` Call `requeueJob` for each dead worker's current job
 
 ### Orphaned job detection
-- [ ] `[core]` Query jobs where `status = processing AND updated_at < now - 5min`
-- [ ] `[core]` Call `requeueJob` for each orphaned job
+- [x] `[core]` Query jobs where `status = processing AND updated_at < now - 5min`
+- [x] `[core]` Call `requeueJob` for each orphaned job
 
 ### Stale queued job detection
-- [ ] `[core]` Query jobs where `status = queued AND updated_at < now - 30s`
-- [ ] `[core]` For each candidate, check Redis sorted set for its job_id and re-enqueue missing jobs
+- [x] `[core]` Query jobs where `status = queued AND updated_at < now - 30s`
+- [x] `[core]` For each candidate, check Redis sorted set for its job_id and re-enqueue missing jobs
 
 ### Reaper leadership lock
-- [ ] `[core]` Acquire Redis lock — `SET reaper_lock {instance_id} NX EX 60`
-- [ ] `[core]` Skip sweep if another reaper holds the lock
+- [x] `[core]` Acquire Redis lock — `SET reaper_lock {instance_id} NX EX 60`
+- [x] `[core]` Skip sweep if another reaper holds the lock
 
 ### Requeue logic
-- [ ] `[core]` In `requeueJob` — fetch full job row
-- [ ] `[core]` If `retry_count >= max_retries` — mark job `dead`, log, return
-- [ ] `[core]` Else — increment `retry_count`, set `status = queued`, push to Redis at original priority
-- [ ] `[core]` Log all requeue events with reason (`worker_death`, `orphan`, or `missing_queue_message`)
+- [x] `[core]` In `requeueJob` — fetch full job row
+- [x] `[core]` If `retry_count >= max_retries` — mark job `dead`, log, return
+- [x] `[core]` Else — increment `retry_count`, set `status = queued`, push to Redis at original priority
+- [x] `[core]` Log all requeue events with reason (`worker_death`, `orphan`, or `missing_queue_message`)
 
 ---
 
