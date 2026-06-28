@@ -78,10 +78,10 @@ Priority tags:
 ## Phase 2 — API Server
 
 ### Setup
-- [ ] `[core]` Set up Gin HTTP server in `api/`
-- [ ] `[core]` Add logger middleware (log method, path, status, latency)
-- [ ] `[core]` Add recovery middleware (panic → 500, never crash server)
-- [ ] `[core]` Define all routes
+- [x] `[core]` Set up Gin HTTP server in `api/`
+- [x] `[core]` Add logger middleware (log method, path, status, latency)
+- [x] `[core]` Add recovery middleware (panic → 500, never crash server)
+- [x] `[core]` Define all routes
   ```
   POST   /uploads
   GET    /jobs/:id
@@ -93,48 +93,48 @@ Priority tags:
   ```
 
 ### Upload handler
-- [ ] `[core]` Parse multipart form, extract file and priority field
-- [ ] `[core]` Validate file — type must be video, size must be under limit
-- [ ] `[core]` Stream file directly to MinIO/S3 — do not buffer to disk
-- [ ] `[core]` Generate `job_id` (UUID v4)
-- [ ] `[core]` Write Job row to Postgres with `status = queued` and stored `priority`
-- [ ] `[core]` Compute priority score (priority tier + timestamp tiebreak)
-- [ ] `[core]` Push QueueMessage to Redis sorted set
-- [ ] `[core]` Return `202` with `job_id` and `status`
+- [x] `[core]` Parse multipart form, extract file and priority field
+- [x] `[core]` Validate file — type must be video, size must be under limit
+- [x] `[core]` Stream file directly to MinIO/S3 — do not buffer to disk
+- [x] `[core]` Generate `job_id` (UUID v4)
+- [x] `[core]` Write Job row to Postgres with `status = queued` and stored `priority`
+- [x] `[core]` Compute priority score (priority tier + timestamp tiebreak)
+- [x] `[core]` Push QueueMessage to Redis sorted set
+- [x] `[core]` Return `202` with `job_id` and `status`
 
 ### Job status handler
-- [ ] `[core]` Fetch Job row by ID from Postgres
-- [ ] `[core]` Left join JobOutputs on job_id
-- [ ] `[core]` Return 404 if job not found
-- [ ] `[core]` Return job fields + outputs array (empty if not completed)
+- [x] `[core]` Fetch Job row by ID from Postgres
+- [x] `[core]` Left join JobOutputs on job_id
+- [x] `[core]` Return 404 if job not found
+- [x] `[core]` Return job fields + outputs array (empty if not completed)
 
 ### Job outputs handler
-- [ ] `[core]` Fetch Job row — return 404 if not found
-- [ ] `[core]` Return 409 if job status is not completed
-- [ ] `[core]` Fetch and return all JobOutput rows for the job
+- [x] `[core]` Fetch Job row — return 404 if not found
+- [x] `[core]` Return 409 if job status is not completed
+- [x] `[core]` Fetch and return all JobOutput rows for the job
 
 ### Internal stats handler
-- [ ] `[feature]` Fetch queue depth from Redis (`ZCARD job_queue`)
-- [ ] `[feature]` Fetch job state counts from Postgres (`GROUP BY status`)
-- [ ] `[feature]` Fetch worker state counts from Postgres (`GROUP BY status`)
-- [ ] `[feature]` Compute throughput — jobs completed in last 1 minute
-- [ ] `[feature]` Run all three DB/Redis queries in parallel via goroutines
-- [ ] `[feature]` Return aggregated stats as JSON
+- [x] `[feature]` Fetch queue depth from Redis (`ZCARD job_queue`)
+- [x] `[feature]` Fetch job state counts from Postgres (`GROUP BY status`)
+- [x] `[feature]` Fetch worker state counts from Postgres (`GROUP BY status`)
+- [x] `[feature]` Compute throughput — jobs completed in last 1 minute
+- [x] `[feature]` Run all three DB/Redis queries in parallel via goroutines
+- [x] `[feature]` Return aggregated stats as JSON
 
 ### Internal workers handler
-- [ ] `[feature]` Fetch all worker rows from Postgres
-- [ ] `[feature]` Return worker list with id, status, current_job, last_heartbeat
+- [x] `[feature]` Fetch all worker rows from Postgres
+- [x] `[feature]` Return worker list with id, status, current_job, last_heartbeat
 
 ### Internal recent jobs handler
-- [ ] `[feature]` Add `GET /internal/jobs` with optional `status` and `limit` query params
-- [ ] `[feature]` Fetch recent jobs from Postgres ordered by `updated_at DESC`
-- [ ] `[feature]` Return job_id, status, retry_count, priority, input_file, created_at, updated_at
+- [x] `[feature]` Add `GET /internal/jobs` with optional `status` and `limit` query params
+- [x] `[feature]` Fetch recent jobs from Postgres ordered by `updated_at DESC`
+- [x] `[feature]` Return job_id, status, retry_count, priority, input_file, created_at, updated_at
 
 ### SSE stats stream
-- [ ] `[feature]` Set SSE headers (`Content-Type: text/event-stream`)
-- [ ] `[feature]` Tick every 5 seconds, collect stats, write `data: {json}\n\n`
-- [ ] `[feature]` Flush after each write
-- [ ] `[feature]` Exit goroutine cleanly on client disconnect (context cancel)
+- [x] `[feature]` Set SSE headers (`Content-Type: text/event-stream`)
+- [x] `[feature]` Tick every 5 seconds, collect stats, write `data: {json}\n\n`
+- [x] `[feature]` Flush after each write
+- [x] `[feature]` Exit goroutine cleanly on client disconnect (context cancel)
 
 ---
 
