@@ -245,18 +245,18 @@ Priority tags:
 
 ## Phase 6 — Observability Dashboard
 
-- [ ] `[feature]` Set up React + Vite project in `frontend/dashboard/`
-- [ ] `[feature]` Write `useSSE(url)` custom hook — connect to SSE stream, return live data
-- [ ] `[feature]` Build `QueueStats` component — queue depth + throughput per minute
-- [ ] `[feature]` Build `WorkerGrid` component — worker cards showing id, status, current job
-- [ ] `[feature]` Build `JobCounts` component — counts per status with visual breakdown
-- [ ] `[feature]` Build `JobTable` component — filterable list of recent jobs by status
-- [ ] `[feature]` Wire aggregate components to `useSSE` hook
-- [ ] `[feature]` Wire `JobTable` to `GET /internal/jobs`
-- [ ] `[feature]` Show connection status indicator — connected / reconnecting
-- [ ] `[polish]` Highlight dead workers in red
-- [ ] `[polish]` Highlight dead jobs in red
-- [ ] `[polish]` Auto-reconnect indicator when SSE drops
+- [x] `[feature]` Set up React + Vite project in `frontend/dashboard/`
+- [x] `[feature]` Write `useSSE(url)` custom hook — connect to SSE stream, return live data
+- [x] `[feature]` Build `QueueStats` component — queue depth + throughput per minute
+- [x] `[feature]` Build `WorkerGrid` component — worker cards showing id, status, current job
+- [x] `[feature]` Build `JobCounts` component — counts per status with visual breakdown
+- [x] `[feature]` Build `JobTable` component — filterable list of recent jobs by status
+- [x] `[feature]` Wire aggregate components to `useSSE` hook
+- [x] `[feature]` Wire `JobTable` to `GET /internal/jobs`
+- [x] `[feature]` Show connection status indicator — connected / reconnecting
+- [x] `[polish]` Highlight dead workers in red
+- [x] `[polish]` Highlight dead jobs in red
+- [x] `[polish]` Auto-reconnect indicator when SSE drops
 
 ---
 
