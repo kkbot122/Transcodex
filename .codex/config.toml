@@ -1,0 +1,28 @@
+[mcp_servers.context7]
+command = "pnpm"
+args = ["dlx", "@upstash/context7-mcp", "--transport", "stdio"]
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+
+[mcp_servers.postgres]
+command = "sh"
+args = ["-lc", "exec pnpm dlx @modelcontextprotocol/server-postgres \"${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/transcodex}\""]
+env_vars = ["DATABASE_URL"]
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+
+[mcp_servers.redis]
+command = "sh"
+args = ["-lc", "exec pnpm dlx --package @modelcontextprotocol/server-redis --package zod mcp-server-redis \"${REDIS_URL:-redis://localhost:6379}\""]
+env_vars = ["REDIS_URL"]
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+
+[mcp_servers.docker]
+command = "pnpm"
+args = ["dlx", "docker-mcp"]
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+
+[mcp_servers.docker.env]
+DOCKER_MCP_LOCAL = "true"
