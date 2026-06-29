@@ -173,6 +173,14 @@ GET /jobs/{job_id}/outputs
 
 Returns CDN URLs for all processed outputs. Returns `409` if job is not yet completed.
 
+### Health check
+
+```
+GET /healthz
+```
+
+Returns `200 OK` for load balancer and container health checks.
+
 ---
 
 ## Environment variables
@@ -183,8 +191,8 @@ Returns CDN URLs for all processed outputs. Returns `409` if job is not yet comp
 | `REDIS_URL` | Redis connection string | — |
 | `STORAGE_ENDPOINT` | MinIO / S3 endpoint | — |
 | `STORAGE_BUCKET` | Bucket name | — |
-| `STORAGE_ACCESS_KEY` | Access key | — |
-| `STORAGE_SECRET_KEY` | Secret key | — |
+| `STORAGE_ACCESS_KEY` | Access key for local MinIO/static-key deployments. Leave unset on ECS when using task roles. | — |
+| `STORAGE_SECRET_KEY` | Secret key for local MinIO/static-key deployments. Leave unset on ECS when using task roles. | — |
 | `CDN_BASE_URL` | Base URL for CDN output links | — |
 | `WORKER_MAX_RETRIES` | Max retry attempts per job | `3` |
 | `WORKER_HEARTBEAT_INTERVAL` | Heartbeat frequency in seconds | `10` |
@@ -210,14 +218,20 @@ transcodex/
 
 ## Deployment
 
-Deployed on AWS. Production stack:
+AWS deployment runbook: [docs/AWS-deployment.md](docs/AWS-deployment.md)
 
-- **EC2** — API server and workers
+Recommended production stack:
+
+- **ECS/Fargate** — API, worker, and reaper containers deployed as separate services
+- **ALB** — API ingress and health checks (`GET /healthz`)
 - **RDS** — PostgreSQL
-- **ElastiCache** — Redis
-- **S3** — video storage
-- **CloudFront** — CDN delivery
-- **ALB** — load balancer
+- **ElastiCache** — Redis queue and locks
+- **S3** — private raw uploads and processed outputs
+- **CloudFront** — CDN routing for outputs, API paths, and frontends
+- **ECR** — Docker image registry
+- **Secrets Manager / SSM** — runtime configuration and secrets
+
+Workers should scale independently from the API. The reaper can run as one small service, or as multiple replicas guarded by the Redis leadership lock.
 
 ---
 

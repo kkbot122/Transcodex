@@ -1,0 +1,35 @@
+project     = "transcodex"
+environment = "demo"
+aws_region  = "ap-south-1"
+
+# First apply: false, so ECR/RDS/Redis/S3/CloudFront exist before ECS tries to pull images.
+# After pushing images and creating runtime secrets, set this to true.
+deploy_app_services = false
+
+# Low-cost demo defaults: no NAT Gateway. ECS tasks use public IPs for outbound ECR/CloudWatch/SSM access,
+# while inbound traffic is still restricted by security groups.
+enable_nat_gateway  = false
+ecs_assign_public_ip = true
+
+# Do not commit the real value. Prefer:
+# export TF_VAR_db_password='...'
+db_password = "replace-me-with-a-strong-password"
+
+# After creating SSM parameters or Secrets Manager secrets, inject them here.
+# DATABASE_URL example:
+# postgres://transcodex:<password>@<rds-endpoint>:5432/transcodex?sslmode=require
+# REDIS_URL example:
+# redis://<elasticache-primary-endpoint>:6379
+app_secret_arns = {
+  DATABASE_URL = "arn:aws:ssm:ap-south-1:123456789012:parameter/transcodex/demo/DATABASE_URL"
+  REDIS_URL    = "arn:aws:ssm:ap-south-1:123456789012:parameter/transcodex/demo/REDIS_URL"
+}
+
+cors_allowed_origins = "https://example.cloudfront.net"
+
+# Optional: use these after the first image push.
+# container_image_tag = "2026-06-29-demo"
+#
+# Optional: point a custom domain at CloudFront.
+# certificate_arn     = "arn:aws:acm:us-east-1:123456789012:certificate/..."
+# cloudfront_aliases  = ["transcodex.example.com"]

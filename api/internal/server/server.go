@@ -79,6 +79,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		AllowHeaders: []string{"Content-Type", "Authorization"},
 	}), gin.CustomRecovery(recoveryHandler))
 
+	router.GET("/healthz", s.healthz)
 	router.POST("/uploads", s.upload)
 	router.GET("/jobs/:id", s.getJob)
 	router.GET("/jobs/:id/outputs", s.getJobOutputs)
@@ -88,6 +89,10 @@ func (s *Server) buildRouter() *gin.Engine {
 	router.GET("/internal/stats/stream", s.streamStats)
 
 	return router
+}
+
+func (s *Server) healthz(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func requestLogger() gin.HandlerFunc {

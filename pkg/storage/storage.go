@@ -27,12 +27,6 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 	if config.Endpoint == "" {
 		return nil, fmt.Errorf("STORAGE_ENDPOINT is required")
 	}
-	if config.AccessKey == "" {
-		return nil, fmt.Errorf("STORAGE_ACCESS_KEY is required")
-	}
-	if config.SecretKey == "" {
-		return nil, fmt.Errorf("STORAGE_SECRET_KEY is required")
-	}
 	if config.Bucket == "" {
 		return nil, fmt.Errorf("STORAGE_BUCKET is required")
 	}
@@ -42,8 +36,19 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 		return nil, err
 	}
 
+	creds := credentials.NewIAM("")
+	if config.AccessKey != "" || config.SecretKey != "" {
+		if config.AccessKey == "" {
+			return nil, fmt.Errorf("STORAGE_ACCESS_KEY is required when STORAGE_SECRET_KEY is set")
+		}
+		if config.SecretKey == "" {
+			return nil, fmt.Errorf("STORAGE_SECRET_KEY is required when STORAGE_ACCESS_KEY is set")
+		}
+		creds = credentials.NewStaticV4(config.AccessKey, config.SecretKey, "")
+	}
+
 	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(config.AccessKey, config.SecretKey, ""),
+		Creds:  creds,
 		Secure: useSSL,
 	})
 	if err != nil {

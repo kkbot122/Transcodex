@@ -198,7 +198,7 @@ Priority tags:
 ## Phase 4 — Reaper
 
 ### Setup
-- [x] `[core]` Set up reaper binary in `reaper/` (or sidecar goroutine in API server)
+- [x] `[core]` Set up reaper binary in `reaper/`
 - [x] `[core]` Start tick loop — sweep every 30 seconds
 - [x] `[core]` Handle context cancellation cleanly
 
@@ -282,50 +282,88 @@ Priority tags:
 ## Phase 8 — AWS Deployment
 
 ### Pre-deployment
-- [ ] `[infra]` Create AWS account and set up IAM user with least-privilege policy
-- [ ] `[infra]` Install and configure AWS CLI
+- [x] `[infra]` Add Terraform scaffold for the AWS deployment
+- [ ] `[infra]` Choose primary region and DNS name for the demo deployment
+- [ ] `[infra]` Install and configure AWS CLI with a least-privilege deploy identity
+- [ ] `[infra]` Create IAM roles for ECS task execution and app task access
+  - Execution role: ECR image pulls, CloudWatch logs, Secrets Manager / SSM reads
+  - App task role: S3 raw/output read-write access only to the Transcodex bucket prefixes
+- [ ] `[infra]` Move production config to Secrets Manager or SSM Parameter Store
+  - `DATABASE_URL`
+  - `REDIS_URL`
+  - `STORAGE_ENDPOINT`
+  - `STORAGE_BUCKET`
+  - `CDN_BASE_URL`
+  - `CORS_ALLOWED_ORIGINS`
 
 ### Networking
-- [ ] `[infra]` Create VPC with CIDR block
-- [ ] `[infra]` Create public subnet and private subnet
-- [ ] `[infra]` Create Internet Gateway, attach to VPC
-- [ ] `[infra]` Create NAT Gateway in public subnet
-- [ ] `[infra]` Configure route tables — public subnet routes to IGW, private subnet routes to NAT
+- [ ] `[infra]` Create VPC across at least two Availability Zones
+- [ ] `[infra]` Create public subnets for ALB and NAT Gateway
+- [ ] `[infra]` Create private app subnets for ECS API, worker, and reaper tasks
+- [ ] `[infra]` Create private data subnets for RDS and ElastiCache
+- [ ] `[infra]` Attach Internet Gateway and public route table
+- [ ] `[infra]` Add NAT Gateway only if private tasks need outbound internet
+- [ ] `[infra]` Add S3 Gateway VPC endpoint if workers should reach S3 without NAT
+- [ ] `[infra]` Create narrow security groups
+  - ALB -> API service on app port
+  - API / worker / reaper -> RDS Postgres
+  - API / worker / reaper -> ElastiCache Redis
+  - API / worker -> S3 through IAM and optional VPC endpoint
 
-### Storage and database
-- [ ] `[infra]` Create S3 bucket — block all public access
-- [ ] `[infra]` Set S3 bucket policy — allow CloudFront OAC on `outputs/*` prefix only
-- [ ] `[infra]` Launch RDS PostgreSQL (`db.t3.micro`) in private subnet
-- [ ] `[infra]` Run migrations against RDS instance
-- [ ] `[infra]` Launch EC2 instance for Redis in private subnet (until ElastiCache budget allows)
-
-### Compute
-- [ ] `[infra]` Launch EC2 instance for API server in private subnet
-- [ ] `[infra]` Install Docker on EC2 instances
-- [ ] `[infra]` Deploy API server container with production env vars
-- [ ] `[infra]` Launch EC2 instance(s) for workers in private subnet
-- [ ] `[infra]` Deploy worker container(s) with production env vars
-- [ ] `[infra]` Verify workers connect to RDS, Redis, S3 successfully
-
-### Load balancer and CDN
-- [ ] `[infra]` Create Application Load Balancer in public subnet
-- [ ] `[infra]` Configure ALB target group pointing to API server EC2
+### Storage, CDN, and frontends
+- [ ] `[infra]` Create S3 bucket with block public access enabled
+- [ ] `[infra]` Store raw uploads under `raw/` and keep them private
+- [ ] `[infra]` Store processed outputs under `outputs/`
+- [ ] `[infra]` Create CloudFront Origin Access Control for the S3 origin
+- [ ] `[infra]` Set S3 bucket policy to allow CloudFront OAC reads for `outputs/*`
+- [ ] `[infra]` Avoid public bucket ACLs and public bucket policies
 - [ ] `[infra]` Create CloudFront distribution
-  - Origin 1: S3 bucket with OAC (`/outputs/*`)
-  - Origin 2: ALB (`/uploads`, `/jobs/*`, `/internal/*`)
-- [ ] `[infra]` Set cache policy — long TTL on `/outputs/*`, no cache on API paths
-- [ ] `[infra]` Update `CDN_BASE_URL` env var on workers to CloudFront domain
-
-### Frontend deployment
+  - `/outputs/*` -> S3 origin with long cache TTL
+  - `/uploads` -> ALB/API origin with caching disabled
+  - `/jobs/*` -> ALB/API origin with caching disabled
+  - `/internal/*` -> ALB/API origin with caching disabled and dashboard access restricted
 - [ ] `[infra]` Build demo frontend with production API URL
-- [ ] `[infra]` Build dashboard frontend with production SSE URL
-- [ ] `[infra]` Upload both builds to S3 static hosting prefixes
-- [ ] `[infra]` Configure CloudFront to serve frontends from S3
+- [ ] `[infra]` Build dashboard frontend with production API/SSE URL
+- [ ] `[infra]` Upload frontend builds to S3 static prefixes or deploy frontend Nginx containers
+- [ ] `[infra]` Serve frontends through CloudFront
+
+### Database and Redis
+- [ ] `[infra]` Create RDS PostgreSQL in private data subnets
+- [ ] `[infra]` Enable automated RDS backups
+- [ ] `[infra]` Restrict RDS inbound access to app security groups only
+- [ ] `[infra]` Run migrations as a one-off deployment job before app services start
+- [ ] `[infra]` Create ElastiCache Redis in private data subnets
+- [ ] `[infra]` Restrict Redis inbound access to API, worker, and reaper security groups only
+- [ ] `[infra]` Set Redis memory/eviction behavior so queue and lock keys are not unexpectedly evicted
+
+### Images and compute
+- [ ] `[infra]` Create ECR repositories for API, worker, reaper, demo frontend, and dashboard
+- [ ] `[infra]` Build and push Docker images to ECR
+- [ ] `[infra]` Create ECS cluster
+- [ ] `[infra]` Create API ECS service behind ALB with `/healthz` health check
+- [ ] `[infra]` Create worker ECS service scaled independently from API
+- [ ] `[infra]` Give workers more CPU/memory than API because FFmpeg is the bottleneck
+- [ ] `[infra]` Create one small reaper ECS service, or multiple replicas relying on Redis leadership lock
+- [ ] `[infra]` Configure container logs to CloudWatch
+- [ ] `[infra]` Configure task CPU/memory limits and restart behavior
+- [ ] `[infra]` Add worker autoscaling based on queue depth or CPU
 
 ### Verification
-- [ ] `[infra]` End to end test on production — upload, process, verify CDN URLs load
+- [ ] `[infra]` Verify API health through ALB and CloudFront API routes
+- [ ] `[infra]` End to end production smoke test — upload, process, verify CDN URLs load
 - [ ] `[infra]` Verify observability dashboard connects and shows live data
 - [ ] `[infra]` Verify reaper recovers a manually killed worker
+- [ ] `[infra]` Verify raw uploads are not publicly readable
+- [ ] `[infra]` Verify only output URLs are readable through CloudFront
+
+### Production hardening
+- [ ] `[infra]` Enforce HTTPS with ACM certificates
+- [ ] `[infra]` Lock CORS to production frontend domains
+- [ ] `[infra]` Restrict or authenticate `/internal/*` and dashboard access
+- [ ] `[infra]` Add CloudWatch metrics for queue depth, jobs by status, dead jobs, worker heartbeat age, throughput/min, and reaper sweep errors
+- [ ] `[infra]` Add alerts for high queue depth, dead jobs above threshold, no active workers, stuck processing jobs, and API 5xx rate
+- [ ] `[infra]` Consider malware scanning if accepting public untrusted uploads
+- [ ] `[infra]` Consider DLQ-style reporting for permanently dead jobs
 
 ---
 

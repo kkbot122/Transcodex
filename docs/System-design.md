@@ -49,7 +49,7 @@ Real world analogy: a self-hosted, simplified AWS MediaConvert or Cloudinary vid
 - **Observability** — metrics collection, job state machines, live dashboard
 - **DevOps / infra** — Docker, Docker Compose, multi-service orchestration
 - **Database design** — job metadata schema, state transitions, indexing
-- **Cloud deployment** — AWS (EC2, RDS, ElastiCache, S3, CloudFront)
+- **Cloud deployment** — AWS (ECS/Fargate, RDS, ElastiCache, S3, CloudFront)
 
 ---
 
@@ -256,7 +256,7 @@ API Server (Go)
 
 **Observability** reads queue depth from Redis and job/worker state from PostgreSQL. Dashboard served via SSE — server pushes updates every 5 seconds.
 
-**Reaper** runs as a sidecar on the API server, sweeps every 30 seconds, recovers dead workers and orphaned jobs.
+**Reaper** runs as its own small process/service, sweeps every 30 seconds, and recovers dead workers, orphaned jobs, and missing queue messages.
 
 ---
 
@@ -323,7 +323,7 @@ cdnURL := fmt.Sprintf("%s/outputs/%s/%s", os.Getenv("CDN_BASE_URL"), jobID, outp
 - `/outputs/*` → S3 bucket (long cache TTL, videos are immutable)
 - `/uploads`, `/jobs/*`, `/internal/*` → ALB (cache disabled, dynamic)
 
-**S3 bucket stays fully private.** Only CloudFront accesses it via Origin Access Control (OAC). Raw uploads (`uploads/` prefix) never exposed via CloudFront.
+**S3 bucket stays fully private.** Only CloudFront accesses it via Origin Access Control (OAC). Raw uploads (`raw/` prefix) are never exposed via CloudFront.
 
 **Cache headers on outputs:**
 ```
@@ -584,13 +584,16 @@ SSE auto-reconnects natively — no reconnection logic needed.
 
 | Local | AWS |
 |---|---|
-| API server container | EC2 / ECS |
-| Worker containers | EC2 / ECS × N |
+| API server container | ECS/Fargate behind ALB |
+| Worker containers | ECS/Fargate service × N |
+| Reaper container | ECS/Fargate service |
 | Redis | ElastiCache |
 | PostgreSQL | RDS |
 | MinIO | S3 |
 | CDN | CloudFront |
 | React frontends | S3 static + CloudFront |
+| Runtime config | Secrets Manager / SSM |
+| Images | ECR |
 
 ### Network Layout
 
@@ -604,16 +607,18 @@ CloudFront (CDN + routing)
     └── /internal/*    → ALB → API server
 
 VPC
-  ├── Public subnet
+  ├── Public subnets
   │     ├── ALB
-  │     └── NAT Gateway (outbound only for private subnet)
-  └── Private subnet
-        ├── EC2 — API server + reaper (sidecar)
-        ├── EC2 × N — Workers
+  │     └── NAT Gateway (only if private tasks need outbound internet)
+  ├── Private app subnets
+  │     ├── ECS service — API
+  │     ├── ECS service — Workers × N
+  │     └── ECS service — Reaper
+  └── Private data subnets
         ├── ElastiCache — Redis
         └── RDS — PostgreSQL
 
-S3 — outside VPC, accessed via VPC endpoint
+S3 — outside VPC, accessed via IAM and optional VPC endpoint
 ```
 
 ### Security
@@ -622,35 +627,29 @@ S3 — outside VPC, accessed via VPC endpoint
 - Workers never expose a port
 - Only ALB faces the internet
 - S3 bucket fully private — CloudFront accesses via OAC only
-- Raw uploads (`uploads/` prefix) never exposed via CloudFront
+- Raw uploads (`raw/` prefix) never exposed via CloudFront
+- `/internal/*` and dashboard routes should be authenticated or network-restricted in production
 
 ### Scaling
 
-- Workers are stateless — add EC2 instances or ECS tasks, point at same Redis and Postgres
-- API server — multiple instances behind ALB, session state in Redis not memory
+- Workers are stateless — add ECS tasks, point at same Redis and Postgres
+- API server — multiple tasks behind ALB, no session state in memory
+- Reaper — one task is enough, but multiple are safe because the Redis leadership lock allows only one active sweep
 - Database — read replicas for observability queries, PgBouncer for connection pooling at high concurrency
-
-### Free Tier
-
-| Service | Free tier |
-|---|---|
-| EC2 t2.micro | 750 hrs/month |
-| RDS t3.micro | 750 hrs/month |
-| S3 | 5GB storage |
-| CloudFront | 1TB transfer |
-| ElastiCache | Not free — run Redis on EC2 during dev |
 
 ### Deployment Order
 
-1. VPC with public + private subnets, NAT Gateway
-2. RDS Postgres in private subnet
-3. Redis on EC2 (swap to ElastiCache before final demo)
-4. S3 bucket — block public access on `uploads/`
-5. EC2 — API server + reaper as Docker containers
-6. EC2 × N — workers as Docker containers
-7. ALB pointing to API server
-8. CloudFront — two origins (ALB + S3)
-9. S3 static hosting for React frontends via CloudFront
+1. VPC with public, private app, and private data subnets
+2. S3 private bucket and CloudFront OAC
+3. RDS Postgres and ElastiCache Redis in private data subnets
+4. Secrets Manager or SSM parameters for runtime configuration
+5. ECR repositories and pushed Docker images
+6. One-off migration job against RDS
+7. ECS API service behind ALB with `/healthz` health check
+8. ECS worker service scaled independently from API
+9. ECS reaper service
+10. CloudFront behaviors for outputs, API paths, and frontends
+11. End-to-end production smoke test
 
 ### Monorepo Structure
 
@@ -701,16 +700,16 @@ SQS is the right production answer — managed, built-in retry, dead letter queu
 Three layers: Redis lock (`SET NX`) prevents two workers acquiring the same job. Status guard (`AND status='queued'`) prevents double Postgres transition. Upsert on JobOutput prevents duplicate rows. Can't guarantee exactly-once across Redis and Postgres without a distributed transaction — what you get is effectively-once.
 
 **What breaks first under load?**
-Workers — FFmpeg is CPU and memory intensive. At scale: one EC2 instance per worker, larger instance types, separate queues for heavy vs light jobs. Second bottleneck is Postgres — read replicas for observability queries, PgBouncer for connection pooling.
+Workers — FFmpeg is CPU and memory intensive. At scale: give worker tasks more CPU/memory, increase worker task count, and consider separate queues for heavy vs light jobs. Second bottleneck is Postgres — read replicas for observability queries, PgBouncer for connection pooling.
 
 **Why not store videos in the DB?**
 Databases are optimised for structured, queryable data — not binary blobs. Object storage is cheap, durable, scalable, and enables CDN delivery. Postgres stores metadata only — paths, sizes, URLs.
 
 **How would you scale to 10x traffic?**
-Workers — stateless, add instances, Auto Scaling Group triggered by Redis queue depth via CloudWatch custom metric. API server — multiple instances behind ALB. Database — read replicas, PgBouncer.
+Workers — stateless, add ECS tasks, autoscale from Redis queue depth via a CloudWatch custom metric or CPU. API server — multiple tasks behind ALB. Database — read replicas, PgBouncer.
 
 **Biggest reliability risk?**
-The reaper. If it goes down, orphaned jobs accumulate. Mitigation: sidecar on API server (shared lifecycle). At scale: distributed lock so only one reaper runs. Production: alert on jobs stuck in `processing` beyond threshold.
+The reaper. If it goes down, orphaned jobs accumulate. Mitigation: run it as a small supervised service. Multiple replicas are safe because the Redis leadership lock allows only one active sweep. Production: alert on jobs stuck in `processing` beyond threshold.
 
 **Why FFmpeg and not MediaConvert?**
 MediaConvert is the right production answer. FFmpeg here is intentional — the point is to understand the pipeline, not glue managed services. Swapping FFmpeg for MediaConvert would change only the worker's processor layer.
