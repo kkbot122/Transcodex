@@ -10,13 +10,14 @@ import (
 const (
 	defaultHeartbeatInterval = 10 * time.Second
 	defaultPollBackoff       = 2 * time.Second
-	defaultLockTTL           = 5 * time.Minute
+	defaultLeaseTTL          = 5 * time.Minute
 	defaultShutdownGrace     = 30 * time.Second
 	defaultWorkerRetries     = 3
 	defaultTempDir           = ""
 	defaultOutputPrefix      = "outputs"
 	defaultOutputCache       = "public, max-age=86400, immutable"
 	defaultFFmpegPath        = "ffmpeg"
+	defaultProcessingMode    = processingModeParallel
 )
 
 type Config struct {
@@ -31,9 +32,10 @@ type Config struct {
 	OutputPrefix        string
 	OutputCacheControl  string
 	FFmpegPath          string
+	ProcessingMode      processingMode
 	HeartbeatInterval   time.Duration
+	LeaseTTL            time.Duration
 	PollBackoff         time.Duration
-	LockTTL             time.Duration
 	ShutdownGracePeriod time.Duration
 	WorkerMaxRetries    int
 }
@@ -51,12 +53,21 @@ func LoadConfig() Config {
 		OutputPrefix:        strings.Trim(env("OUTPUT_PREFIX", defaultOutputPrefix), "/"),
 		OutputCacheControl:  env("OUTPUT_CACHE_CONTROL", defaultOutputCache),
 		FFmpegPath:          env("FFMPEG_PATH", defaultFFmpegPath),
+		ProcessingMode:      loadProcessingMode(),
 		HeartbeatInterval:   envSeconds("WORKER_HEARTBEAT_INTERVAL", defaultHeartbeatInterval),
+		LeaseTTL:            envSeconds("WORKER_LEASE_TTL_SECONDS", defaultLeaseTTL),
 		PollBackoff:         envSeconds("WORKER_POLL_BACKOFF_SECONDS", defaultPollBackoff),
-		LockTTL:             envSeconds("WORKER_LOCK_TTL_SECONDS", defaultLockTTL),
 		ShutdownGracePeriod: envSeconds("WORKER_SHUTDOWN_GRACE_SECONDS", defaultShutdownGrace),
 		WorkerMaxRetries:    envInt("WORKER_MAX_RETRIES", defaultWorkerRetries),
 	}
+}
+
+func loadProcessingMode() processingMode {
+	mode := processingMode(env("WORKER_PROCESSING_MODE", string(defaultProcessingMode)))
+	if mode != processingModeParallel && mode != processingModeSequential {
+		return defaultProcessingMode
+	}
+	return mode
 }
 
 func env(key, fallback string) string {

@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: transcodex-api
+    static_configs:
+      - targets: [api:8080]
+    metrics_path: /metrics
+
+  - job_name: transcodex-worker
+    dns_sd_configs:
+      - names: [worker]
+        type: A
+        port: 9090
+
+  - job_name: transcodex-reaper
+    static_configs:
+      - targets: [reaper:9090]

@@ -80,6 +80,7 @@ func (s *Server) buildRouter() *gin.Engine {
 	}), gin.CustomRecovery(recoveryHandler))
 
 	router.GET("/healthz", s.healthz)
+	router.GET("/metrics", s.metrics)
 	router.POST("/uploads", s.upload)
 	router.GET("/jobs/:id", s.getJob)
 	router.GET("/jobs/:id/outputs", s.getJobOutputs)

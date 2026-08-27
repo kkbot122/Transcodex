@@ -270,7 +270,7 @@ Two mechanisms work together:
 
 **Reaper sweep (every 30s):**
 1. Find workers where `last_heartbeat < now - 30s` → mark dead, requeue their current job
-2. Find jobs where `status = 'processing' AND updated_at < now - 5min` → requeue (orphan recovery)
+2. Find running attempts where `lease_expires_at < now` → expire the attempt and requeue the job (lease recovery)
 3. Find stale queued jobs missing from Redis → re-enqueue (Postgres/Redis consistency repair)
 
 **Job state machine:**
@@ -287,24 +287,24 @@ completed         retry_count++
 ```
 
 **Idempotency on retry:**
-- Worker checks if output files already exist before re-uploading
-- JobOutput writes use upsert (`ON CONFLICT DO UPDATE`) — no duplicate rows
+- Attempt-scoped object keys keep stale artifacts from overwriting a winning attempt
+- JobOutput writes use a unique job/output constraint and are committed only by the current attempt
 
-**At-least-once delivery:** Redis can redeliver a message if worker crashes before acknowledging. Fix: Redis lock (`SET lock:job:{id} NX EX 300`) — only one worker processes a job at a time. Lock expires if worker dies.
+**At-least-once attempt execution:** Redis is a recoverable scheduling index rather than the durable source of truth. Each worker claim creates a uniquely identified attempt with a renewable PostgreSQL processing lease. Conditional transitions fence stale attempts, and attempt-scoped object keys prevent a recovered worker from publishing over the winning output set. The visible completion contract is at-most-once; subprocess execution itself is not exactly once.
 
 ### 8.2 Processing Flow
 
 Inside a single worker, per job:
 
-1. Poll Redis — `ZPOPMAX job_queue` (highest priority score first)
-2. Acquire lock — `SET lock:job:{id} {worker_id} NX EX 300`
-3. Mark processing — `UPDATE jobs SET status='processing' WHERE id=$1 AND status='queued'`
+1. Atomically pop a job identifier from the highest priority tier and remove its queue membership
+2. Claim the job in PostgreSQL and create a renewable processing lease
+3. Mark processing with the new attempt as the current attempt
 4. Download raw file from object storage → `/tmp/{job_id}/raw.mp4`
 5. FFmpeg transcode — 3 resolutions + thumbnail in parallel via goroutines
 6. Upload outputs to object storage — parallel
 7. Write JobOutput rows — upsert
 8. Mark completed — `UPDATE jobs SET status='completed'`
-9. Cleanup — `os.RemoveAll(/tmp/{job_id}/)`, release Redis lock
+9. Cleanup — `os.RemoveAll(/tmp/{job_id}/)` and best-effort cleanup of stale attempt artifacts
 
 **Failure at any step** → `handleFailure()` → increment retry, requeue or mark dead.
 
@@ -368,20 +368,14 @@ api/
 
 Postgres write before Redis push — crash safety. If Redis push fails, reaper detects queued job with no message and re-enqueues.
 
-**Priority scoring:**
-```go
-func PriorityScore(priority int, enqueuedAt time.Time) float64 {
-    return float64(priority)*1_000_000_000_000_000 - float64(enqueuedAt.UnixMilli())
-}
-```
-
-Higher priority wins. Within same priority, older jobs win (FIFO). The function lives in `pkg/queue` so API enqueue, worker requeue, and reaper repair all use the same formula.
+**Priority ordering:** Higher priority wins. Each priority tier has a FIFO Redis list, while a sorted-set index selects the highest non-empty tier. Lua enqueue and pop operations update the tier index and membership set atomically.
 
 **Redis queue indexes:**
-- `job_queue` sorted set stores serialized queue messages scored by priority
+- `job_queue:priorities` sorted set indexes non-empty priority tiers
+- `job_queue:priority:{priority}` lists queued job identifiers in FIFO order
 - `queued_jobs` set stores job IDs currently expected in the queue
 
-Workers remove a job ID from `queued_jobs` after `ZPOPMAX`. The reaper checks `SISMEMBER queued_jobs {job_id}` instead of scanning the sorted set.
+Workers atomically remove a job ID from `queued_jobs` while popping it. The reaper checks `SISMEMBER queued_jobs {job_id}` instead of scanning every priority list.
 
 **Connection pools:**
 - Postgres: `pgxpool`, max 20 connections
@@ -486,11 +480,11 @@ Mark dead, requeue their current job.
 
 **Pass 2 — orphaned jobs:**
 ```sql
-SELECT * FROM jobs
-WHERE status = 'processing'
-AND updated_at < now() - interval '5 minutes'
+SELECT job_id, id FROM job_attempts
+WHERE status = 'running'
+AND lease_expires_at < now()
 ```
-5 minute threshold — safety net only, not primary recovery.
+Expire the current attempt and recover the job. A renewable processing lease, not generic job age, is the liveness authority.
 
 **Pass 3 — stale queued jobs:**
 ```sql
@@ -506,7 +500,7 @@ For each candidate, check whether `job_id` exists in the Redis `queued_jobs` set
 
 **Race condition defence:**
 - Status guard: `UPDATE jobs SET status='processing' WHERE id=$1 AND status='queued'` — 0 rows affected = abort
-- Redis lock: worker holds lock, second worker skips job entirely
+- Current-attempt conditional claim: only one worker can create the current attempt
 
 **At scale:** single reaper instance. Use Redis distributed lock (`SET reaper_lock NX EX 60`) to prevent multiple reapers racing.
 
@@ -697,7 +691,7 @@ Postgres polling with `FOR UPDATE SKIP LOCKED` is legitimate but adds lock conte
 SQS is the right production answer — managed, built-in retry, dead letter queues. Built Redis-based queue here for learning — you understand what SQS does under the hood because you built the equivalent.
 
 **How does the system handle duplicate processing?**
-Three layers: Redis lock (`SET NX`) prevents two workers acquiring the same job. Status guard (`AND status='queued'`) prevents double Postgres transition. Upsert on JobOutput prevents duplicate rows. Can't guarantee exactly-once across Redis and Postgres without a distributed transaction — what you get is effectively-once.
+Redis queue operations are atomic and idempotent, while PostgreSQL conditionally creates one current attempt for a queued job. If a lease expires, another attempt may execute the job, which is the intentional at-least-once behavior. Attempt identity, conditional completion, attempt-scoped objects, and unique job/output rows ensure at-most one visible completion. Exactly-once execution across FFmpeg, PostgreSQL, Redis, and object storage is not claimed.
 
 **What breaks first under load?**
 Workers — FFmpeg is CPU and memory intensive. At scale: give worker tasks more CPU/memory, increase worker task count, and consider separate queues for heavy vs light jobs. Second bottleneck is Postgres — read replicas for observability queries, PgBouncer for connection pooling.
@@ -709,7 +703,7 @@ Databases are optimised for structured, queryable data — not binary blobs. Obj
 Workers — stateless, add ECS tasks, autoscale from Redis queue depth via a CloudWatch custom metric or CPU. API server — multiple tasks behind ALB. Database — read replicas, PgBouncer.
 
 **Biggest reliability risk?**
-The reaper. If it goes down, orphaned jobs accumulate. Mitigation: run it as a small supervised service. Multiple replicas are safe because the Redis leadership lock allows only one active sweep. Production: alert on jobs stuck in `processing` beyond threshold.
+The reaper. If it goes down, expired attempts and missing queue entries accumulate. Mitigation: run it as a small supervised service. Multiple replicas are safe because the Redis leadership lock reduces duplicate sweeps and conditional lifecycle transitions preserve correctness. Production: alert on expired leases, queue age, and reaper sweep failures.
 
 **Why FFmpeg and not MediaConvert?**
 MediaConvert is the right production answer. FFmpeg here is intentional — the point is to understand the pipeline, not glue managed services. Swapping FFmpeg for MediaConvert would change only the worker's processor layer.

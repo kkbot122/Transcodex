@@ -2,14 +2,11 @@ package reaper
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/kisna/transcodex/pkg/queue"
-	"github.com/redis/go-redis/v9"
 )
 
 func (r *Reaper) Sweep(ctx context.Context) error {
@@ -60,7 +57,7 @@ func (r *Reaper) recoverDeadWorkers(ctx context.Context) error {
 		}
 
 		if worker.CurrentJob != nil {
-			if err := r.requeueJob(ctx, *worker.CurrentJob, "worker_death"); err != nil {
+			if err := r.requeueJob(ctx, *worker.CurrentJob, "", "worker_death"); err != nil {
 				return err
 			}
 		}
@@ -70,30 +67,31 @@ func (r *Reaper) recoverDeadWorkers(ctx context.Context) error {
 
 func (r *Reaper) recoverOrphanedJobs(ctx context.Context) error {
 	rows, err := r.db.Query(ctx, `
-		SELECT id::text
-		FROM jobs
-		WHERE status = 'processing'
-			AND updated_at < now() - ($1::double precision * interval '1 second')
-	`, r.config.OrphanJobThreshold.Seconds())
+		SELECT a.job_id::text, a.id::text
+		FROM job_attempts a
+		WHERE a.status = 'running'
+			AND a.lease_expires_at < now() - ($1::double precision * interval '1 second')
+	`, r.config.LeaseExpiryGrace.Seconds())
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
-	jobIDs := []string{}
+	type expiredAttempt struct{ jobID, attemptID string }
+	attempts := []expiredAttempt{}
 	for rows.Next() {
-		var jobID string
-		if err := rows.Scan(&jobID); err != nil {
+		var attempt expiredAttempt
+		if err := rows.Scan(&attempt.jobID, &attempt.attemptID); err != nil {
 			return err
 		}
-		jobIDs = append(jobIDs, jobID)
+		attempts = append(attempts, attempt)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
-	for _, jobID := range jobIDs {
-		if err := r.requeueJob(ctx, jobID, "orphan"); err != nil {
+	for _, attempt := range attempts {
+		if err := r.requeueJob(ctx, attempt.jobID, attempt.attemptID, "lease_expired"); err != nil {
 			return err
 		}
 	}
@@ -133,7 +131,7 @@ func (r *Reaper) recoverMissingQueueMessages(ctx context.Context) error {
 			continue
 		}
 
-		if err := r.requeueJob(ctx, jobID, "missing_queue_message"); err != nil {
+		if err := r.enqueueJob(ctx, jobID); err != nil {
 			return err
 		}
 	}
@@ -144,68 +142,68 @@ func (r *Reaper) queueContainsJob(ctx context.Context, jobID string) (bool, erro
 	return r.redis.SIsMember(ctx, queue.QueuedJobsSet, jobID).Result()
 }
 
-func (r *Reaper) requeueJob(ctx context.Context, jobID string, reason string) error {
-	job, err := r.fetchJob(ctx, jobID)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			slog.Warn("skip requeue missing job", "reaper_id", r.id, "job_id", jobID, "reason", reason)
-			return nil
-		}
-		return err
-	}
-
-	if requeueActionFor(job) == requeueActionMarkDead {
-		if err := r.markDead(ctx, job.ID); err != nil {
-			return err
-		}
-		slog.Error("job marked dead", "reaper_id", r.id, "job_id", job.ID, "reason", reason, "retry_count", job.RetryCount, "max_retries", job.MaxRetries)
-		return nil
-	}
-
+func (r *Reaper) requeueJob(ctx context.Context, jobID, attemptID, reason string) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
-
+	defer func() { _ = tx.Rollback(ctx) }()
+	var status string
+	var currentAttempt *string
+	var retryCount, maxRetries, priority int
+	if err := tx.QueryRow(ctx, `
+		SELECT status::text, current_attempt_id::text, retry_count, max_retries, priority
+		FROM jobs WHERE id = $1 FOR UPDATE
+	`, jobID).Scan(&status, &currentAttempt, &retryCount, &maxRetries, &priority); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if status != "processing" || currentAttempt == nil || (attemptID != "" && *currentAttempt != attemptID) {
+		return nil
+	}
+	if currentAttempt != nil {
+		if _, err := tx.Exec(ctx, `UPDATE job_attempts SET status = 'expired', finished_at = now(), failure_category = $2 WHERE id = $1 AND status = 'running'`, *currentAttempt, reason); err != nil {
+			return err
+		}
+	}
+	if retryCount >= maxRetries {
+		if _, err := tx.Exec(ctx, `UPDATE jobs SET status = 'dead', current_attempt_id = NULL WHERE id = $1`, jobID); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return nil
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE jobs
 		SET retry_count = retry_count + 1,
-			status = 'queued'
+			status = 'queued', current_attempt_id = NULL, queue_entered_at = now()
 		WHERE id = $1
-	`, job.ID); err != nil {
+	`, jobID); err != nil {
 		return err
 	}
-
-	enqueuedAt := time.Now().UTC()
-	payload, err := json.Marshal(QueueMessage{
-		JobID:      job.ID,
-		InputFile:  job.InputFile,
-		Priority:   job.Priority,
-		EnqueuedAt: enqueuedAt,
-	})
-	if err != nil {
-		return err
-	}
-
-	pipe := r.redis.TxPipeline()
-	pipe.ZAdd(ctx, queue.Name, redis.Z{
-		Score:  queue.PriorityScore(job.Priority, enqueuedAt),
-		Member: payload,
-	})
-	pipe.SAdd(ctx, queue.QueuedJobsSet, job.ID)
-	if _, err := pipe.Exec(ctx); err != nil {
-		return err
-	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-
-	slog.Info("job requeued", "reaper_id", r.id, "job_id", job.ID, "reason", reason, "retry_count", job.RetryCount+1, "priority", job.Priority)
+	if err := queue.Enqueue(ctx, r.redis, jobID, priority); err != nil {
+		return err
+	}
+	slog.Info("job requeued", "reaper_id", r.id, "job_id", jobID, "reason", reason, "retry_count", retryCount+1, "priority", priority)
 	return nil
+}
+
+func (r *Reaper) enqueueJob(ctx context.Context, jobID string) error {
+	job, err := r.fetchJob(ctx, jobID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	return queue.Enqueue(ctx, r.redis, job.ID, job.Priority)
 }
 
 type requeueAction string

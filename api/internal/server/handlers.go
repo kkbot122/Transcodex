@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
@@ -19,7 +20,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/kisna/transcodex/pkg/queue"
 	"github.com/minio/minio-go/v7"
-	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -57,6 +57,13 @@ func (s *Server) upload(c *gin.Context) {
 					s.removeStoredObject(c.Request.Context(), inputFile)
 				}
 				respondError(c, http.StatusBadRequest, "priority must be an integer")
+				return
+			}
+			if err := queue.ValidatePriority(parsed); err != nil {
+				if fileUploaded {
+					s.removeStoredObject(c.Request.Context(), inputFile)
+				}
+				respondError(c, http.StatusBadRequest, err.Error())
 				return
 			}
 			priority = parsed
@@ -286,7 +293,7 @@ func (s *Server) collectStats(ctx context.Context) (Stats, error) {
 
 	group, ctx := errgroup.WithContext(ctx)
 	group.Go(func() error {
-		depth, err := s.redis.ZCard(ctx, queue.Name).Result()
+		depth, err := s.redis.SCard(ctx, queue.QueuedJobsSet).Result()
 		if err == nil {
 			stats.QueueDepth = depth
 		}
@@ -334,6 +341,20 @@ func (s *Server) collectStats(ctx context.Context) (Stats, error) {
 			WHERE status = 'completed' AND updated_at >= now() - interval '1 minute'
 		`).Scan(&stats.ThroughputPerMin)
 	})
+	group.Go(func() error {
+		return s.db.QueryRow(ctx, `
+			SELECT
+				percentile_cont(0.50) WITHIN GROUP (ORDER BY (EXTRACT(EPOCH FROM (a.started_at - a.queue_entered_at)) * 1000))::bigint,
+				percentile_cont(0.95) WITHIN GROUP (ORDER BY (EXTRACT(EPOCH FROM (a.started_at - a.queue_entered_at)) * 1000))::bigint,
+				percentile_cont(0.50) WITHIN GROUP (ORDER BY a.processing_duration_ms)::bigint,
+				percentile_cont(0.95) WITHIN GROUP (ORDER BY a.processing_duration_ms)::bigint,
+				percentile_cont(0.50) WITHIN GROUP (ORDER BY (EXTRACT(EPOCH FROM (j.completed_at - j.created_at)) * 1000))::bigint,
+				percentile_cont(0.95) WITHIN GROUP (ORDER BY (EXTRACT(EPOCH FROM (j.completed_at - j.created_at)) * 1000))::bigint
+			FROM job_attempts a
+			JOIN jobs j ON j.completed_attempt_id = a.id
+			WHERE a.status = 'completed' AND a.finished_at >= now() - interval '1 hour'
+		`).Scan(&stats.Latency.QueueWaitP50MS, &stats.Latency.QueueWaitP95MS, &stats.Latency.ProcessingP50MS, &stats.Latency.ProcessingP95MS, &stats.Latency.TotalP50MS, &stats.Latency.TotalP95MS)
+	})
 
 	return stats, group.Wait()
 }
@@ -354,29 +375,12 @@ func (s *Server) createQueuedJob(ctx context.Context, jobID, inputFile string, p
 		return err
 	}
 
-	enqueuedAt := time.Now().UTC()
-	payload, err := json.Marshal(QueueMessage{
-		JobID:      jobID,
-		InputFile:  inputFile,
-		Priority:   priority,
-		EnqueuedAt: enqueuedAt,
-	})
-	if err != nil {
-		return err
-	}
-
-	pipe := s.redis.TxPipeline()
-	pipe.ZAdd(ctx, queue.Name, redis.Z{
-		Score:  queue.PriorityScore(priority, enqueuedAt),
-		Member: payload,
-	})
-	pipe.SAdd(ctx, queue.QueuedJobsSet, jobID)
-	if _, err := pipe.Exec(ctx); err != nil {
-		return err
-	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return err
+	}
+	if err := queue.Enqueue(ctx, s.redis, jobID, priority); err != nil {
+		slog.Error("enqueue durable job", "job_id", jobID, "error", err)
+		// The reaper repairs queued jobs whose Redis queue entry is missing.
 	}
 	return nil
 }
@@ -464,6 +468,21 @@ func (s *Server) fetchJobWithOutputs(ctx context.Context, id string) (Job, []Job
 	if !found {
 		return Job{}, nil, pgx.ErrNoRows
 	}
+	var queueWait, download, processing, upload, total *int64
+	var attemptCount int64
+	if err := s.db.QueryRow(ctx, `
+		SELECT
+			CASE WHEN a.started_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.started_at - a.queue_entered_at)) * 1000)::bigint END,
+			a.download_duration_ms, a.processing_duration_ms, a.upload_duration_ms,
+			CASE WHEN j.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (j.completed_at - j.created_at)) * 1000)::bigint END,
+			(SELECT count(*) FROM job_attempts WHERE job_id = j.id)
+		FROM jobs j
+		LEFT JOIN job_attempts a ON a.id = j.completed_attempt_id
+		WHERE j.id = $1
+	`, id).Scan(&queueWait, &download, &processing, &upload, &total, &attemptCount); err != nil {
+		return Job{}, nil, err
+	}
+	job.Timings = &JobTimings{QueueWaitMS: queueWait, DownloadMS: download, ProcessingMS: processing, UploadMS: upload, TotalMS: total, AttemptCount: attemptCount}
 	return job, outputs, nil
 }
 

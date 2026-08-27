@@ -31,6 +31,8 @@ frontend/*/*.tsbuildinfo
 tmp/
 uploads/
 outputs/
+.benchmark/
+benchmark-results/
 
 # Terraform
 **/.terraform/

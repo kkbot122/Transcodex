@@ -3,7 +3,6 @@ package worker
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,40 +10,42 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/kisna/transcodex/pkg/queue"
 	"github.com/minio/minio-go/v7"
-	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
 )
 
 var errJobAlreadyClaimed = errors.New("job is not queued")
+var errStaleAttempt = errors.New("attempt is no longer current")
 
 func (w *Worker) processJob(ctx context.Context, msg QueueMessage) error {
-	locked, err := w.acquireLock(ctx, msg.JobID)
+	attemptID, claimed, err := w.markProcessing(ctx, msg.JobID)
 	if err != nil {
-		return fmt.Errorf("acquire lock: %w", err)
-	}
-	if !locked {
-		slog.Info("job already locked, skipping", "worker_id", w.id, "job_id", msg.JobID)
-		return nil
-	}
-	defer w.releaseLock(context.Background(), msg.JobID)
-
-	claimed, err := w.markProcessing(ctx, msg.JobID)
-	if err != nil {
-		w.handleFailure(ctx, msg.JobID, err)
+		slog.Error("claim job", "worker_id", w.id, "job_id", msg.JobID, "error", err)
 		return err
 	}
 	if !claimed {
 		return errJobAlreadyClaimed
 	}
 
+	jobCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	leaseDone := make(chan struct{})
+	go func() {
+		defer close(leaseDone)
+		w.renewLeaseUntilDone(jobCtx, attemptID, cancel)
+	}()
+	defer func() {
+		cancel()
+		<-leaseDone
+	}()
+
 	if err := w.setWorkerBusy(ctx, msg.JobID); err != nil {
-		w.handleFailure(ctx, msg.JobID, err)
+		w.handleFailure(ctx, msg.JobID, attemptID, err)
 		return err
 	}
 	defer func() {
@@ -53,15 +54,18 @@ func (w *Worker) processJob(ctx context.Context, msg QueueMessage) error {
 		}
 	}()
 
-	if err := w.runJob(ctx, msg); err != nil {
-		w.handleFailure(ctx, msg.JobID, err)
+	if err := w.runJob(jobCtx, msg, attemptID); err != nil {
+		if errors.Is(err, errStaleAttempt) {
+			return nil
+		}
+		w.handleFailure(ctx, msg.JobID, attemptID, err)
 		return err
 	}
 
 	return nil
 }
 
-func (w *Worker) runJob(ctx context.Context, msg QueueMessage) error {
+func (w *Worker) runJob(ctx context.Context, msg QueueMessage, attemptID string) error {
 	tempRoot := w.config.TempDir
 	if tempRoot == "" {
 		tempRoot = os.TempDir()
@@ -77,20 +81,44 @@ func (w *Worker) runJob(ctx context.Context, msg QueueMessage) error {
 	}()
 
 	inputPath := filepath.Join(workDir, "raw.mp4")
+	if err := w.setAttemptPhase(ctx, attemptID, "downloading"); err != nil {
+		return err
+	}
+	started := time.Now()
 	if err := w.downloadInput(ctx, msg.InputFile, inputPath); err != nil {
 		return err
 	}
+	if err := w.recordAttemptDuration(ctx, attemptID, "download_duration_ms", time.Since(started)); err != nil {
+		return err
+	}
 
-	outputs, err := runFFmpegJobs(ctx, w.config.FFmpegPath, inputPath, workDir)
+	if err := w.setAttemptPhase(ctx, attemptID, "processing"); err != nil {
+		return err
+	}
+	started = time.Now()
+	outputs, err := runFFmpegJobs(ctx, w.config.FFmpegPath, inputPath, workDir, w.config.ProcessingMode)
 	if err != nil {
 		return err
 	}
-
-	if err := w.uploadOutputs(ctx, msg.JobID, outputs); err != nil {
+	if err := w.recordAttemptDuration(ctx, attemptID, "processing_duration_ms", time.Since(started)); err != nil {
 		return err
 	}
 
-	if err := w.completeJob(ctx, msg.JobID, outputs); err != nil {
+	if err := w.setAttemptPhase(ctx, attemptID, "uploading"); err != nil {
+		return err
+	}
+	started = time.Now()
+	if err := w.uploadOutputs(ctx, msg.JobID, attemptID, outputs); err != nil {
+		return err
+	}
+	if err := w.recordAttemptDuration(ctx, attemptID, "upload_duration_ms", time.Since(started)); err != nil {
+		return err
+	}
+
+	if err := w.setAttemptPhase(ctx, attemptID, "completing"); err != nil {
+		return err
+	}
+	if err := w.completeJob(ctx, msg.JobID, attemptID, outputs); err != nil {
 		return err
 	}
 
@@ -98,36 +126,109 @@ func (w *Worker) runJob(ctx context.Context, msg QueueMessage) error {
 	return nil
 }
 
-func (w *Worker) acquireLock(ctx context.Context, jobID string) (bool, error) {
-	return w.redis.SetNX(ctx, lockKey(jobID), w.id, w.config.LockTTL).Result()
-}
-
-func (w *Worker) releaseLock(ctx context.Context, jobID string) {
-	const script = `
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-	return redis.call("DEL", KEYS[1])
-end
-return 0
-`
-	if err := w.redis.Eval(ctx, script, []string{lockKey(jobID)}, w.id).Err(); err != nil {
-		slog.Error("release job lock", "worker_id", w.id, "job_id", jobID, "error", err)
-	}
-}
-
-func lockKey(jobID string) string {
-	return "lock:job:" + jobID
-}
-
-func (w *Worker) markProcessing(ctx context.Context, jobID string) (bool, error) {
-	tag, err := w.db.Exec(ctx, `
-		UPDATE jobs
-		SET status = 'processing'
-		WHERE id = $1 AND status = 'queued'
-	`, jobID)
+func (w *Worker) markProcessing(ctx context.Context, jobID string) (string, bool, error) {
+	tx, err := w.db.Begin(ctx)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	return tag.RowsAffected() == 1, nil
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var status string
+	var retryCount int
+	var queueEnteredAt time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT status::text, retry_count, queue_entered_at
+		FROM jobs WHERE id = $1 FOR UPDATE
+	`, jobID).Scan(&status, &retryCount, &queueEnteredAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if status != statusQueued {
+		return "", false, nil
+	}
+	attemptID := uuid.NewString()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO job_attempts (id, job_id, attempt_number, worker_id, queue_entered_at, lease_expires_at, processing_mode)
+		VALUES ($1, $2, $3, $4, $5, now() + ($6::double precision * interval '1 second'), $7)
+	`, attemptID, jobID, retryCount+1, w.id, queueEnteredAt, w.config.LeaseTTL.Seconds(), w.config.ProcessingMode); err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE jobs SET status = 'processing', current_attempt_id = $2
+		WHERE id = $1 AND status = 'queued' AND current_attempt_id IS NULL
+	`, jobID, attemptID); err != nil {
+		return "", false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", false, err
+	}
+	return attemptID, true, nil
+}
+
+func (w *Worker) renewLeaseUntilDone(ctx context.Context, attemptID string, cancel context.CancelFunc) {
+	period := w.config.LeaseTTL / 3
+	if period <= 0 {
+		period = time.Second
+	}
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			updated, err := w.renewAttemptLease(ctx, attemptID)
+			if err != nil {
+				slog.Error("renew attempt lease", "worker_id", w.id, "attempt_id", attemptID, "error", err)
+				cancel()
+				return
+			}
+			if !updated {
+				slog.Warn("attempt lease lost", "worker_id", w.id, "attempt_id", attemptID)
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+func (w *Worker) renewAttemptLease(ctx context.Context, attemptID string) (bool, error) {
+	tag, err := w.db.Exec(ctx, `
+		UPDATE job_attempts a
+		SET last_heartbeat = now(),
+			lease_expires_at = now() + ($2::double precision * interval '1 second')
+		FROM jobs j
+		WHERE a.id = $1 AND a.job_id = j.id
+			AND a.status = 'running' AND j.status = 'processing'
+			AND j.current_attempt_id = a.id
+	`, attemptID, w.config.LeaseTTL.Seconds())
+	return tag.RowsAffected() == 1, err
+}
+
+func (w *Worker) setAttemptPhase(ctx context.Context, attemptID, phase string) error {
+	_, err := w.db.Exec(ctx, `
+		UPDATE job_attempts SET current_phase = $2
+		WHERE id = $1 AND status = 'running'
+	`, attemptID, phase)
+	return err
+}
+
+func (w *Worker) recordAttemptDuration(ctx context.Context, attemptID, field string, duration time.Duration) error {
+	query := ""
+	switch field {
+	case "download_duration_ms":
+		query = "UPDATE job_attempts SET download_duration_ms = $2 WHERE id = $1"
+	case "processing_duration_ms":
+		query = "UPDATE job_attempts SET processing_duration_ms = $2 WHERE id = $1"
+	case "upload_duration_ms":
+		query = "UPDATE job_attempts SET upload_duration_ms = $2 WHERE id = $1"
+	default:
+		return fmt.Errorf("unsupported attempt duration field %q", field)
+	}
+	_, err := w.db.Exec(ctx, query, attemptID, duration.Milliseconds())
+	return err
 }
 
 func (w *Worker) setWorkerBusy(ctx context.Context, jobID string) error {
@@ -171,7 +272,7 @@ func (w *Worker) downloadInput(ctx context.Context, key string, destination stri
 	return nil
 }
 
-func runFFmpegJobs(ctx context.Context, ffmpegPath string, inputPath string, workDir string) ([]Output, error) {
+func runFFmpegJobs(ctx context.Context, ffmpegPath string, inputPath string, workDir string, mode processingMode) ([]Output, error) {
 	tasks := []ffmpegTask{
 		{
 			OutputType:  outputType360,
@@ -208,23 +309,33 @@ func runFFmpegJobs(ctx context.Context, ffmpegPath string, inputPath string, wor
 	}
 
 	outputs := make([]Output, len(tasks))
-	errs := make([]error, len(tasks))
-	var wg sync.WaitGroup
-
-	for i, task := range tasks {
-		i, task := i, task
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	if mode == processingModeSequential {
+		for i, task := range tasks {
 			outputPath := filepath.Join(workDir, task.FileName)
 			if err := runFFmpeg(ctx, ffmpegPath, task.Args(inputPath, outputPath)); err != nil {
-				errs[i] = fmt.Errorf("%s: %w", task.OutputType, err)
-				return
+				return nil, fmt.Errorf("%s: %w", task.OutputType, err)
 			}
 			info, err := os.Stat(outputPath)
 			if err != nil {
-				errs[i] = fmt.Errorf("%s stat: %w", task.OutputType, err)
-				return
+				return nil, fmt.Errorf("%s stat: %w", task.OutputType, err)
+			}
+			outputs[i] = Output{Type: task.OutputType, LocalPath: outputPath, FileSize: info.Size(), ContentType: task.ContentType}
+		}
+		return outputs, nil
+	}
+
+	group, groupCtx := errgroup.WithContext(ctx)
+
+	for i, task := range tasks {
+		i, task := i, task
+		group.Go(func() error {
+			outputPath := filepath.Join(workDir, task.FileName)
+			if err := runFFmpeg(groupCtx, ffmpegPath, task.Args(inputPath, outputPath)); err != nil {
+				return fmt.Errorf("%s: %w", task.OutputType, err)
+			}
+			info, err := os.Stat(outputPath)
+			if err != nil {
+				return fmt.Errorf("%s stat: %w", task.OutputType, err)
 			}
 			outputs[i] = Output{
 				Type:        task.OutputType,
@@ -232,14 +343,11 @@ func runFFmpegJobs(ctx context.Context, ffmpegPath string, inputPath string, wor
 				FileSize:    info.Size(),
 				ContentType: task.ContentType,
 			}
-		}()
+			return nil
+		})
 	}
-	wg.Wait()
-
-	for _, err := range errs {
-		if err != nil {
-			return nil, err
-		}
+	if err := group.Wait(); err != nil {
+		return nil, err
 	}
 	return outputs, nil
 }
@@ -255,13 +363,13 @@ func runFFmpeg(ctx context.Context, ffmpegPath string, args []string) error {
 	return nil
 }
 
-func (w *Worker) uploadOutputs(ctx context.Context, jobID string, outputs []Output) error {
+func (w *Worker) uploadOutputs(ctx context.Context, jobID, attemptID string, outputs []Output) error {
 	group, ctx := errgroup.WithContext(ctx)
 	for i := range outputs {
 		i := i
 		group.Go(func() error {
 			output := &outputs[i]
-			key := fmt.Sprintf("%s/%s/%s", w.config.OutputPrefix, jobID, output.Type)
+			key := fmt.Sprintf("%s/%s/%s/%s", w.config.OutputPrefix, jobID, attemptID, output.Type)
 			file, err := os.Open(output.LocalPath)
 			if err != nil {
 				return fmt.Errorf("open output %s: %w", output.Type, err)
@@ -291,7 +399,7 @@ func (w *Worker) cdnURL(key string) string {
 	return w.config.CDNBaseURL + "/" + key
 }
 
-func (w *Worker) completeJob(ctx context.Context, jobID string, outputs []Output) error {
+func (w *Worker) completeJob(ctx context.Context, jobID, attemptID string, outputs []Output) error {
 	tx, err := w.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -300,52 +408,91 @@ func (w *Worker) completeJob(ctx context.Context, jobID string, outputs []Output
 		_ = tx.Rollback(ctx)
 	}()
 
+	if tag, err := tx.Exec(ctx, `
+		UPDATE jobs
+		SET status = 'completed', completed_attempt_id = $2,
+			completed_at = now(), current_attempt_id = NULL
+		WHERE id = $1 AND status = 'processing' AND current_attempt_id = $2
+	`, jobID, attemptID); err != nil {
+		return err
+	} else if tag.RowsAffected() != 1 {
+		return errStaleAttempt
+	}
+
 	for _, output := range outputs {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO job_outputs (job_id, type, cdn_url, file_size)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO job_outputs (job_id, attempt_id, type, cdn_url, file_size)
+			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (job_id, type) DO UPDATE
-			SET cdn_url = EXCLUDED.cdn_url,
+			SET attempt_id = EXCLUDED.attempt_id,
+				cdn_url = EXCLUDED.cdn_url,
 				file_size = EXCLUDED.file_size
-		`, jobID, output.Type, output.CDNURL, output.FileSize); err != nil {
+		`, jobID, attemptID, output.Type, output.CDNURL, output.FileSize); err != nil {
 			return err
 		}
 	}
 
 	if _, err := tx.Exec(ctx, `
-		UPDATE jobs
-		SET status = 'completed'
-		WHERE id = $1
-	`, jobID); err != nil {
+		UPDATE job_attempts SET status = 'completed', finished_at = now(), current_phase = 'completed'
+		WHERE id = $1 AND status = 'running'
+	`, attemptID); err != nil {
 		return err
 	}
 
 	return tx.Commit(ctx)
 }
 
-func (w *Worker) handleFailure(ctx context.Context, jobID string, cause error) {
-	slog.Error("job failed", "worker_id", w.id, "job_id", jobID, "error", cause)
-
-	job, err := w.fetchJob(ctx, jobID)
+func (w *Worker) handleFailure(ctx context.Context, jobID, attemptID string, cause error) {
+	slog.Error("job failed", "worker_id", w.id, "job_id", jobID, "attempt_id", attemptID, "error", cause)
+	tx, err := w.db.Begin(ctx)
 	if err != nil {
+		slog.Error("begin failure transition", "job_id", jobID, "error", err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var status string
+	var retryCount, maxRetries, priority int
+	if err := tx.QueryRow(ctx, `
+		SELECT status::text, retry_count, max_retries, priority
+		FROM jobs WHERE id = $1 AND current_attempt_id = $2 FOR UPDATE
+	`, jobID, attemptID).Scan(&status, &retryCount, &maxRetries, &priority); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			slog.Warn("job disappeared before failure handling", "worker_id", w.id, "job_id", jobID)
 			return
 		}
-		slog.Error("fetch failed job", "worker_id", w.id, "job_id", jobID, "error", err)
+		slog.Error("read failed job", "job_id", jobID, "attempt_id", attemptID, "error", err)
 		return
 	}
-
-	if failureActionFor(job) == failureActionMarkDead {
-		if err := w.markDead(ctx, job.ID); err != nil {
-			slog.Error("mark job dead", "worker_id", w.id, "job_id", job.ID, "error", err)
+	if status != statusProcessing {
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE job_attempts SET status = 'failed', finished_at = now(), failure_category = 'processing_failure', failure_detail = left($2, 500)
+		WHERE id = $1 AND status = 'running'
+	`, attemptID, cause.Error()); err != nil {
+		slog.Error("mark attempt failed", "attempt_id", attemptID, "error", err)
+		return
+	}
+	if retryCount >= maxRetries {
+		_, err = tx.Exec(ctx, `UPDATE jobs SET status = 'dead', current_attempt_id = NULL WHERE id = $1`, jobID)
+	} else {
+		_, err = tx.Exec(ctx, `
+			UPDATE jobs SET retry_count = retry_count + 1, status = 'queued', current_attempt_id = NULL, queue_entered_at = now()
+			WHERE id = $1
+		`, jobID)
+	}
+	if err != nil {
+		slog.Error("transition failed job", "job_id", jobID, "error", err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Error("commit failed job", "job_id", jobID, "error", err)
+		return
+	}
+	if retryCount < maxRetries {
+		if err := queue.Enqueue(ctx, w.redis, jobID, priority); err != nil {
+			slog.Error("enqueue retry", "job_id", jobID, "error", err)
 		}
-		slog.Error("job permanently failed", "worker_id", w.id, "job_id", job.ID, "retry_count", job.RetryCount, "max_retries", job.MaxRetries)
-		return
-	}
-
-	if err := w.requeueJob(ctx, job); err != nil {
-		slog.Error("requeue job", "worker_id", w.id, "job_id", job.ID, "error", err)
 	}
 }
 
@@ -400,27 +547,8 @@ func (w *Worker) requeueJob(ctx context.Context, job Job) error {
 		return err
 	}
 
-	enqueuedAt := time.Now().UTC()
-	payload, err := json.Marshal(QueueMessage{
-		JobID:      job.ID,
-		InputFile:  job.InputFile,
-		Priority:   job.Priority,
-		EnqueuedAt: enqueuedAt,
-	})
-	if err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-
-	pipe := w.redis.TxPipeline()
-	pipe.ZAdd(ctx, queue.Name, redisZ(queue.PriorityScore(job.Priority, enqueuedAt), payload))
-	pipe.SAdd(ctx, queue.QueuedJobsSet, job.ID)
-	if _, err := pipe.Exec(ctx); err != nil {
-		return err
-	}
-
-	return tx.Commit(ctx)
-}
-
-func redisZ(score float64, member []byte) redis.Z {
-	return redis.Z{Score: score, Member: member}
+	return queue.Enqueue(ctx, w.redis, job.ID, job.Priority)
 }

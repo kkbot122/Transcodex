@@ -10,6 +10,11 @@ type Stats = {
   throughput_per_min: number;
   workers: Record<string, number>;
   jobs: Record<JobStatus, number>;
+  latency: {
+    queue_wait_p95_ms?: number;
+    processing_p95_ms?: number;
+    total_p95_ms?: number;
+  };
 };
 
 type Worker = {
@@ -43,6 +48,7 @@ const emptyStats: Stats = {
   throughput_per_min: 0,
   workers: { total: 0, idle: 0, busy: 0, dead: 0 },
   jobs: { queued: 0, processing: 0, completed: 0, dead: 0 },
+  latency: {},
 };
 
 export default function App() {
@@ -160,17 +166,23 @@ function QueueStats({ stats }: { stats: Stats }) {
       <Metric label="Throughput/min" value={stats.throughput_per_min} />
       <Metric label="Workers" value={workerTotal} />
       <Metric label="Active Jobs" value={activeJobs} />
+      <Metric label="Queue p95" value={formatMilliseconds(stats.latency.queue_wait_p95_ms)} />
+      <Metric label="Total p95" value={formatMilliseconds(stats.latency.total_p95_ms)} />
     </section>
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({ label, value }: { label: string; value: number | string }) {
   return (
     <article className="metric">
       <span>{label}</span>
       <strong>{value}</strong>
     </article>
   );
+}
+
+function formatMilliseconds(value?: number) {
+  return value == null ? "-" : `${value} ms`;
 }
 
 function JobCounts({ stats }: { stats: Stats }) {

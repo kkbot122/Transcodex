@@ -10,7 +10,7 @@ const (
 	defaultSweepInterval       = 30 * time.Second
 	defaultLeadershipLockTTL   = 60 * time.Second
 	defaultDeadWorkerThreshold = 30 * time.Second
-	defaultOrphanJobThreshold  = 5 * time.Minute
+	defaultLeaseExpiryGrace    = 0 * time.Second
 	defaultStaleQueueThreshold = 30 * time.Second
 )
 
@@ -20,7 +20,7 @@ type Config struct {
 	SweepInterval       time.Duration
 	LeadershipLockTTL   time.Duration
 	DeadWorkerThreshold time.Duration
-	OrphanJobThreshold  time.Duration
+	LeaseExpiryGrace    time.Duration
 	StaleQueueThreshold time.Duration
 }
 
@@ -37,7 +37,7 @@ func LoadConfig() Config {
 		SweepInterval:       sweepInterval,
 		LeadershipLockTTL:   leadershipLockTTL,
 		DeadWorkerThreshold: envSeconds("REAPER_DEAD_WORKER_THRESHOLD_SECONDS", defaultDeadWorkerThreshold),
-		OrphanJobThreshold:  envSeconds("REAPER_ORPHAN_JOB_THRESHOLD_SECONDS", defaultOrphanJobThreshold),
+		LeaseExpiryGrace:    envSeconds("REAPER_LEASE_EXPIRY_GRACE_SECONDS", defaultLeaseExpiryGrace),
 		StaleQueueThreshold: envSeconds("REAPER_STALE_QUEUE_THRESHOLD_SECONDS", defaultStaleQueueThreshold),
 	}
 }

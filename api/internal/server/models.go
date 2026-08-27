@@ -17,14 +17,24 @@ type QueueMessage struct {
 }
 
 type Job struct {
-	ID         string    `json:"job_id"`
-	Status     string    `json:"status"`
-	RetryCount int       `json:"retry_count"`
-	MaxRetries int       `json:"max_retries,omitempty"`
-	Priority   int       `json:"priority"`
-	InputFile  string    `json:"input_file,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         string      `json:"job_id"`
+	Status     string      `json:"status"`
+	RetryCount int         `json:"retry_count"`
+	MaxRetries int         `json:"max_retries,omitempty"`
+	Priority   int         `json:"priority"`
+	InputFile  string      `json:"input_file,omitempty"`
+	CreatedAt  time.Time   `json:"created_at"`
+	UpdatedAt  time.Time   `json:"updated_at"`
+	Timings    *JobTimings `json:"timings,omitempty"`
+}
+
+type JobTimings struct {
+	QueueWaitMS  *int64 `json:"queue_wait_ms,omitempty"`
+	DownloadMS   *int64 `json:"download_ms,omitempty"`
+	ProcessingMS *int64 `json:"processing_ms,omitempty"`
+	UploadMS     *int64 `json:"upload_ms,omitempty"`
+	TotalMS      *int64 `json:"total_ms,omitempty"`
+	AttemptCount int64  `json:"attempt_count"`
 }
 
 type JobOutput struct {
@@ -48,4 +58,14 @@ type Stats struct {
 	ThroughputPerMin int64            `json:"throughput_per_min"`
 	Workers          map[string]int64 `json:"workers"`
 	Jobs             map[string]int64 `json:"jobs"`
+	Latency          LatencyStats     `json:"latency"`
+}
+
+type LatencyStats struct {
+	QueueWaitP50MS  *int64 `json:"queue_wait_p50_ms,omitempty"`
+	QueueWaitP95MS  *int64 `json:"queue_wait_p95_ms,omitempty"`
+	ProcessingP50MS *int64 `json:"processing_p50_ms,omitempty"`
+	ProcessingP95MS *int64 `json:"processing_p95_ms,omitempty"`
+	TotalP50MS      *int64 `json:"total_p50_ms,omitempty"`
+	TotalP95MS      *int64 `json:"total_p95_ms,omitempty"`
 }

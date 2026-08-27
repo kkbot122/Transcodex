@@ -42,6 +42,13 @@ type Output struct {
 	ContentType string
 }
 
+type processingMode string
+
+const (
+	processingModeParallel   processingMode = "parallel"
+	processingModeSequential processingMode = "sequential"
+)
+
 type ffmpegTask struct {
 	OutputType  string
 	FileName    string

@@ -95,14 +95,12 @@ docker compose exec postgres psql -U postgres -d transcodex -c "\d job_outputs"
 docker compose exec postgres psql -U postgres -d transcodex -c "\d workers"
 ```
 
-Verify Redis sorted-set queue behavior:
+Verify Redis priority-tier queue behavior:
 
 ```bash
-docker compose exec redis redis-cli ZADD job_queue 100 '{"job_id":"demo-high","priority":100}'
-docker compose exec redis redis-cli SADD queued_jobs demo-high
-docker compose exec redis redis-cli ZADD job_queue 10 '{"job_id":"demo-low","priority":10}'
-docker compose exec redis redis-cli SADD queued_jobs demo-low
-docker compose exec redis redis-cli ZPOPMAX job_queue
+docker compose exec redis redis-cli ZRANGE job_queue:priorities 0 -1 WITHSCORES
+docker compose exec redis redis-cli LRANGE job_queue:priority:0 0 -1
+docker compose exec redis redis-cli SCARD queued_jobs
 ```
 
 Services:
@@ -121,6 +119,17 @@ Scale workers:
 ```bash
 docker compose up --scale worker=3
 ```
+
+Run the local benchmark harness:
+
+```bash
+./scripts/benchmark.sh quick
+./scripts/benchmark.sh portfolio
+```
+
+The quick profile validates the harness with short synthetic media. The portfolio profile compares sequential versus parallel processing across one, two, and four workers using fixed 30-second 1080p inputs. Reports are machine-specific and are written to the ignored `benchmark-results/` directory; do not copy their numbers into a resume until the run completes successfully.
+
+The processing contract is at-least-once attempt execution with at-most-once visible completion. PostgreSQL stores durable job and attempt state; Redis is a recoverable scheduling index. Renewable attempt leases and conditional transitions prevent stale workers from publishing completion after recovery.
 
 ---
 

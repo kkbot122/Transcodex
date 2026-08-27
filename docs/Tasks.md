@@ -151,14 +151,14 @@ Priority tags:
 - [x] `[core]` Stop heartbeat goroutine cleanly on context cancel
 
 ### Poll loop
-- [x] `[core]` Poll Redis sorted set with `ZPOPMAX job_queue`
+- [x] `[core]` Atomically pop the highest priority FIFO tier from Redis with a Lua script
 - [x] `[core]` Sleep 2 seconds on empty queue before retrying
 - [x] `[core]` Pass message to job processor on receipt
 
-### Lock
-- [x] `[core]` Acquire Redis lock — `SET lock:job:{id} {worker_id} NX EX 300`
-- [x] `[core]` Skip job silently if lock not acquired
-- [x] `[core]` Release lock on job completion or failure (`DEL lock:job:{id}`)
+### Attempt lease
+- [x] `[core]` Create a unique attempt and current-attempt reference during conditional claim
+- [x] `[core]` Renew the PostgreSQL processing lease while work is running
+- [x] `[core]` Fence stale workers with current-attempt conditional transitions
 
 ### Job processing
 - [x] `[core]` Update job status — `processing` — with `AND status='queued'` guard
@@ -172,13 +172,14 @@ Priority tags:
 - [x] `[core]` Run FFmpeg 720p transcode subprocess
 - [x] `[core]` Run FFmpeg 1080p transcode subprocess
 - [x] `[core]` Run FFmpeg thumbnail extraction subprocess
-- [x] `[core]` Run all four subprocesses in parallel via `sync.WaitGroup` + goroutines
+- [x] `[core]` Run all four subprocesses in parallel via cancellable goroutines
+- [x] `[benchmark]` Support sequential mode with identical FFmpeg arguments
 - [x] `[core]` Use `exec.CommandContext` so subprocesses respect context cancellation
 - [x] `[core]` Capture FFmpeg stderr for error logging
 - [x] `[core]` Fail entire job if any single subprocess fails
 
 ### Output upload
-- [x] `[core]` Upload each output file to MinIO/S3 under `outputs/{job_id}/{type}`
+- [x] `[core]` Upload each output file to MinIO/S3 under an attempt-scoped output key
 - [x] `[core]` Run all uploads in parallel via goroutines
 - [x] `[core]` Build CDN URL for each output using `CDN_BASE_URL` env var
 
@@ -207,9 +208,9 @@ Priority tags:
 - [x] `[core]` Mark each dead worker — `status = dead`, `current_job = null`
 - [x] `[core]` Call `requeueJob` for each dead worker's current job
 
-### Orphaned job detection
-- [x] `[core]` Query jobs where `status = processing AND updated_at < now - 5min`
-- [x] `[core]` Call `requeueJob` for each orphaned job
+### Expired attempt detection
+- [x] `[core]` Query running attempts where the processing lease has expired
+- [x] `[core]` Recover each still-current attempt conditionally
 
 ### Stale queued job detection
 - [x] `[core]` Query jobs where `status = queued AND updated_at < now - 30s`

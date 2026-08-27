@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/kisna/transcodex/pkg/metrics"
 	"github.com/kisna/transcodex/worker/internal/worker"
 )
 
@@ -24,6 +26,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer app.Close()
+
+	metricsServer := &http.Server{Addr: env("WORKER_METRICS_ADDR", ":9090"), Handler: metrics.Handler("worker")}
+	go func() {
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("worker metrics server", "error", err)
+		}
+	}()
+	defer func() { _ = metricsServer.Shutdown(context.Background()) }()
 
 	stopPollingCtx, stopPolling := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -55,4 +65,11 @@ func main() {
 		cancelProcessing()
 		<-done
 	}
+}
+
+func env(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }

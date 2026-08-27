@@ -2,12 +2,12 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kisna/transcodex/pkg/postgres"
 	"github.com/kisna/transcodex/pkg/queue"
@@ -153,27 +153,19 @@ func (w *Worker) heartbeat(ctx context.Context) error {
 }
 
 func (w *Worker) poll(ctx context.Context) (*QueueMessage, error) {
-	items, err := w.redis.ZPopMax(ctx, queue.Name, 1).Result()
+	jobID, err := queue.Pop(ctx, w.redis)
 	if err != nil {
 		return nil, err
 	}
-	if len(items) == 0 {
-		return nil, redis.Nil
-	}
 
-	member, ok := items[0].Member.(string)
-	if !ok {
-		return nil, errors.New("queue member is not a string")
+	job, err := w.fetchJob(ctx, jobID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
 	}
-
-	var msg QueueMessage
-	if err := json.Unmarshal([]byte(member), &msg); err != nil {
+	if err != nil {
 		return nil, err
 	}
-	if err := w.redis.SRem(ctx, queue.QueuedJobsSet, msg.JobID).Err(); err != nil {
-		return nil, err
-	}
-	return &msg, nil
+	return &QueueMessage{JobID: job.ID, InputFile: job.InputFile, Priority: job.Priority}, nil
 }
 
 func sleepOrDone(ctx context.Context, duration time.Duration) {

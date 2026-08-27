@@ -73,6 +73,21 @@ services:
     ports:
       - "3001:80"
 
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: [observability]
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      api:
+        condition: service_started
+      worker:
+        condition: service_started
+      reaper:
+        condition: service_started
+
   migrate:
     image: migrate/migrate:4
     depends_on:
