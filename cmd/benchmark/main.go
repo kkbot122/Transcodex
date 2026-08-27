@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -45,11 +47,14 @@ type report struct {
 }
 
 type environment struct {
-	OS     string `json:"os"`
-	Arch   string `json:"arch"`
-	CPUs   int    `json:"cpus"`
-	GitRev string `json:"git_revision,omitempty"`
-	FFmpeg string `json:"ffmpeg_version,omitempty"`
+	OS          string `json:"os"`
+	Arch        string `json:"arch"`
+	CPUs        int    `json:"cpus"`
+	GitRev      string `json:"git_revision,omitempty"`
+	Dirty       string `json:"git_dirty,omitempty"`
+	FFmpeg      string `json:"ffmpeg_version,omitempty"`
+	Docker      string `json:"docker_version,omitempty"`
+	InputSHA256 string `json:"input_sha256,omitempty"`
 }
 
 type summary struct {
@@ -97,7 +102,7 @@ func main() {
 		results = append(results, waitForJob(client, *baseURL, id, deadline))
 	}
 	finished := time.Now().UTC()
-	r := report{RunID: *runID, Mode: *mode, Workers: *workers, Jobs: *jobs, StartedAt: started, FinishedAt: finished, Environment: collectEnvironment(), Results: results}
+	r := report{RunID: *runID, Mode: *mode, Workers: *workers, Jobs: *jobs, StartedAt: started, FinishedAt: finished, Environment: collectEnvironment(*input), Results: results}
 	r.Summary = summarize(results, started, finished)
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
@@ -115,7 +120,7 @@ func main() {
 }
 
 func markdownReport(r report) string {
-	return fmt.Sprintf("# Transcodex Benchmark\n\n- Run: `%s`\n- Mode: `%s`\n- Workers: `%d`\n- Jobs: `%d`\n- OS/arch: `%s/%s`\n- CPUs: `%d`\n- Git revision: `%s`\n- FFmpeg: `%s`\n\n| Metric | Value |\n|---|---:|\n| Completed | %d/%d |\n| Success rate | %.1f%% |\n| Throughput | %.2f jobs/min |\n| Queue wait p50 | %s ms |\n| Queue wait p95 | %s ms |\n| FFmpeg p50 | %s ms |\n| FFmpeg p95 | %s ms |\n| Total p50 | %s ms |\n| Total p95 | %s ms |\n\nThis report is workload- and machine-specific.\n", r.RunID, r.Mode, r.Workers, r.Jobs, r.Environment.OS, r.Environment.Arch, r.Environment.CPUs, r.Environment.GitRev, r.Environment.FFmpeg, r.Summary.Completed, r.Jobs, r.Summary.SuccessRate*100, r.Summary.ThroughputPerMin, formatOptional(r.Summary.QueueWaitP50MS), formatOptional(r.Summary.QueueWaitP95MS), formatOptional(r.Summary.ProcessingP50MS), formatOptional(r.Summary.ProcessingP95MS), formatOptional(r.Summary.TotalP50MS), formatOptional(r.Summary.TotalP95MS))
+	return fmt.Sprintf("# Transcodex Benchmark\n\n- Run: `%s`\n- Mode: `%s`\n- Workers: `%d`\n- Jobs: `%d`\n- OS/arch: `%s/%s`\n- CPUs: `%d`\n- Git revision: `%s`\n- Git dirty: `%s`\n- Docker: `%s`\n- FFmpeg: `%s`\n- Input SHA-256: `%s`\n\n| Metric | Value |\n|---|---:|\n| Completed | %d/%d |\n| Success rate | %.1f%% |\n| Throughput | %.2f jobs/min |\n| Queue wait p50 | %s ms |\n| Queue wait p95 | %s ms |\n| FFmpeg p50 | %s ms |\n| FFmpeg p95 | %s ms |\n| Total p50 | %s ms |\n| Total p95 | %s ms |\n\nThis report is workload- and machine-specific.\n", r.RunID, r.Mode, r.Workers, r.Jobs, r.Environment.OS, r.Environment.Arch, r.Environment.CPUs, r.Environment.GitRev, r.Environment.Dirty, r.Environment.Docker, r.Environment.FFmpeg, r.Environment.InputSHA256, r.Summary.Completed, r.Jobs, r.Summary.SuccessRate*100, r.Summary.ThroughputPerMin, formatOptional(r.Summary.QueueWaitP50MS), formatOptional(r.Summary.QueueWaitP95MS), formatOptional(r.Summary.ProcessingP50MS), formatOptional(r.Summary.ProcessingP95MS), formatOptional(r.Summary.TotalP50MS), formatOptional(r.Summary.TotalP95MS))
 }
 
 func formatOptional(value *int64) string {
@@ -253,12 +258,24 @@ func percentile(values []int64, p float64) *int64 {
 	return &value
 }
 
-func collectEnvironment() environment {
-	e := environment{OS: runtime.GOOS, Arch: runtime.GOARCH, CPUs: runtime.NumCPU()}
+func collectEnvironment(input string) environment {
+	e := environment{OS: runtime.GOOS, Arch: runtime.GOARCH, CPUs: runtime.NumCPU(), Dirty: commandOutput("git", "status", "--porcelain"), Docker: commandOutput("docker", "version", "--format", "{{.Server.Version}}")}
+	if e.Dirty == "" {
+		e.Dirty = "clean"
+	} else {
+		e.Dirty = "dirty"
+	}
 	e.GitRev = commandOutput("git", "rev-parse", "HEAD")
 	e.FFmpeg = commandOutput("ffmpeg", "-version")
 	if i := strings.IndexByte(e.FFmpeg, '\n'); i >= 0 {
 		e.FFmpeg = e.FFmpeg[:i]
+	}
+	if file, err := os.Open(input); err == nil {
+		hasher := sha256.New()
+		if _, err := io.Copy(hasher, file); err == nil {
+			e.InputSHA256 = hex.EncodeToString(hasher.Sum(nil))
+		}
+		_ = file.Close()
 	}
 	return e
 }

@@ -17,7 +17,7 @@ services:
       minio-create-bucket:
         condition: service_completed_successfully
     ports:
-      - "8080:8080"
+      - "${TRANSCODEX_API_PORT:-8080}:8080"
 
   worker:
     build:
@@ -111,7 +111,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: transcodex
     ports:
-      - "5432:5432"
+      - "${TRANSCODEX_POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -123,7 +123,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${TRANSCODEX_REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -137,8 +137,8 @@ services:
       MINIO_ROOT_USER: transcodex
       MINIO_ROOT_PASSWORD: transcodex-secret
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${TRANSCODEX_MINIO_PORT:-9000}:9000"
+      - "${TRANSCODEX_MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
     healthcheck:

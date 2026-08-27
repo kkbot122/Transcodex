@@ -125,6 +125,16 @@ Run the local benchmark harness:
 ```bash
 ./scripts/benchmark.sh quick
 ./scripts/benchmark.sh portfolio
+
+Run the worker-crash recovery check:
+
+```bash
+./scripts/failure-injection.sh
+```
+
+The recovery harness uses an isolated Compose project, terminates a worker after
+the job enters processing, starts a replacement worker, and verifies that the
+job completes with a second attempt and exactly one retry increment.
 ```
 
 The quick profile validates the harness with short synthetic media. The portfolio profile compares sequential versus parallel processing across one, two, and four workers using fixed 30-second 1080p inputs. Reports are machine-specific and are written to the ignored `benchmark-results/` directory; do not copy their numbers into a resume until the run completes successfully.

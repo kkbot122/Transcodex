@@ -125,6 +125,7 @@ func (s *Server) getJob(c *gin.Context) {
 		"priority":    job.Priority,
 		"created_at":  job.CreatedAt,
 		"updated_at":  job.UpdatedAt,
+		"timings":     job.Timings,
 		"outputs":     outputs,
 	})
 }
@@ -287,8 +288,9 @@ func (s *Server) writeStatsEvent(ctx context.Context, writer io.Writer, flusher 
 
 func (s *Server) collectStats(ctx context.Context) (Stats, error) {
 	stats := Stats{
-		Workers: map[string]int64{"total": 0, "idle": 0, "busy": 0, "dead": 0},
-		Jobs:    map[string]int64{statusQueued: 0, statusProcessing: 0, statusCompleted: 0, statusDead: 0},
+		Workers:  map[string]int64{"total": 0, "idle": 0, "busy": 0, "dead": 0},
+		Jobs:     map[string]int64{statusQueued: 0, statusProcessing: 0, statusCompleted: 0, statusDead: 0},
+		Attempts: map[string]int64{"running": 0, "completed": 0, "failed": 0, "expired": 0},
 	}
 
 	group, ctx := errgroup.WithContext(ctx)
@@ -354,6 +356,44 @@ func (s *Server) collectStats(ctx context.Context) (Stats, error) {
 			JOIN jobs j ON j.completed_attempt_id = a.id
 			WHERE a.status = 'completed' AND a.finished_at >= now() - interval '1 hour'
 		`).Scan(&stats.Latency.QueueWaitP50MS, &stats.Latency.QueueWaitP95MS, &stats.Latency.ProcessingP50MS, &stats.Latency.ProcessingP95MS, &stats.Latency.TotalP50MS, &stats.Latency.TotalP95MS)
+	})
+	group.Go(func() error {
+		rows, err := s.db.Query(ctx, `SELECT status::text, count(*) FROM job_attempts GROUP BY status`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var status string
+			var count int64
+			if err := rows.Scan(&status, &count); err != nil {
+				return err
+			}
+			stats.Attempts[status] = count
+		}
+		return rows.Err()
+	})
+	group.Go(func() error {
+		var age *float64
+		if err := s.db.QueryRow(ctx, `
+			SELECT EXTRACT(EPOCH FROM (now() - min(queue_entered_at)))
+			FROM jobs WHERE status = 'queued'
+		`).Scan(&age); err != nil {
+			return err
+		}
+		stats.OldestQueuedAge = age
+		return nil
+	})
+	group.Go(func() error {
+		var age *float64
+		if err := s.db.QueryRow(ctx, `
+			SELECT EXTRACT(EPOCH FROM (now() - min(started_at)))
+			FROM job_attempts WHERE status = 'running'
+		`).Scan(&age); err != nil {
+			return err
+		}
+		stats.ActiveLeaseAge = age
+		return nil
 	})
 
 	return stats, group.Wait()

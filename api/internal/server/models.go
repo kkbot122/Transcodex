@@ -55,9 +55,12 @@ type Worker struct {
 
 type Stats struct {
 	QueueDepth       int64            `json:"queue_depth"`
+	OldestQueuedAge  *float64         `json:"oldest_queued_age_seconds,omitempty"`
+	ActiveLeaseAge   *float64         `json:"active_lease_age_seconds,omitempty"`
 	ThroughputPerMin int64            `json:"throughput_per_min"`
 	Workers          map[string]int64 `json:"workers"`
 	Jobs             map[string]int64 `json:"jobs"`
+	Attempts         map[string]int64 `json:"attempts"`
 	Latency          LatencyStats     `json:"latency"`
 }
 
