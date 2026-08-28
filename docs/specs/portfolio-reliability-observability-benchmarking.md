@@ -171,7 +171,7 @@ Provide two benchmark profiles. The fast profile verifies the harness and correc
 
 ### Benchmark harness
 
-- Provide a host-side benchmark orchestrator rather than mounting the Docker socket into a container. The orchestrator builds images, creates an isolated Compose project, scales workers, invokes a containerized load generator, collects results, and tears down only resources created for that benchmark project.
+- Provide a host-side benchmark orchestrator rather than mounting the Docker socket into a container. The orchestrator builds the application images once per invocation, then creates one isolated Compose project per `(processing mode, worker count)` configuration, starts that stack once, scales workers, invokes the load generator for every workload and repetition in that stack, collects results, and tears down only resources created for that benchmark project.
 - Generate source videos locally with FFmpeg using deterministic video and audio filters. Do not download benchmark media from the network.
 - The fast profile uses a short synthetic input, a small job count, one measured repetition, both processing modes, and a reduced worker matrix sufficient to validate orchestration and report generation within CI-friendly time.
 - The portfolio profile uses a 30-second 1080p H.264 input; 10-, 25-, and 50-job workloads; one, two, and four workers; sequential and parallel modes; one discarded warm-up; and three measured repetitions per matrix cell.
@@ -180,6 +180,8 @@ Provide two benchmark profiles. The fast profile verifies the harness and correc
 - Record raw per-job status, attempt count, phase timings, wall-clock submission/completion times, output metadata, and errors in machine-readable JSON.
 - Produce a Markdown summary containing success rate, completed throughput, p50/p95 queue wait, p50/p95 FFmpeg time, p50/p95 end-to-end time, retry count, dead-job count, and relative changes between configurations.
 - Throughput is successful completed jobs divided by measured wall-clock time from first submission to last terminal result. Failed or timed-out jobs remain in the denominator and are reported separately.
+- Infrastructure startup, image builds, fixture generation, warm-up, and teardown are excluded from measured wall-clock time. Repetitions reuse the already-started stack for their configuration; only configuration boundaries incur lifecycle overhead.
+- Provide a separate aggregation script that consumes raw JSON reports and emits per-cell jobs/min, total duration, sequential-versus-parallel speedup, and 1-to-2-to-4-worker scaling. Missing cells are shown as `n/a`, never as zero.
 - Percentage improvements use the same workload and machine and state the baseline explicitly. The report never replaces missing or failed cells with zero and never generates resume prose from incomplete data.
 - Capture benchmark date, Git revision and dirty-state flag, operating system, CPU model/count, available memory, Docker and Compose versions, image digests, FFmpeg version, source-video checksum, container CPU/memory limits, FFmpeg thread setting, worker count, processing mode, job count, repetition, and timeout.
 - Commit the benchmark methodology and a representative portfolio report. Raw result files may be retained in a dedicated results area when reasonably sized; generated video files and transient volumes are not committed.

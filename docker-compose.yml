@@ -1,5 +1,6 @@
 services:
   api:
+    image: transcodex-api:local
     build:
       context: .
       dockerfile: api/Dockerfile
@@ -20,6 +21,7 @@ services:
       - "${TRANSCODEX_API_PORT:-8080}:8080"
 
   worker:
+    image: transcodex-worker:local
     build:
       context: .
       dockerfile: worker/Dockerfile
@@ -38,6 +40,7 @@ services:
         condition: service_completed_successfully
 
   reaper:
+    image: transcodex-reaper:local
     build:
       context: .
       dockerfile: reaper/Dockerfile

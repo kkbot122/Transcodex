@@ -13,33 +13,61 @@ case "$profile" in
   *) echo "usage: $0 quick|portfolio" >&2; exit 2 ;;
 esac
 
+docker compose build api reaper worker >/dev/null
+
 docker compose run --rm -T --entrypoint ffmpeg -v "$fixture_dir:/benchmark" worker \
   -y -f lavfi -i "testsrc2=size=$size:rate=30" -f lavfi -i "sine=frequency=1000:sample_rate=48000" \
-  -t "$duration" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac /benchmark/input.mp4
+  -t "$duration" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac /benchmark/input.mp4 >/dev/null 2>&1
 
 run_id="$(date -u +%Y%m%dt%H%M%S)"
+active_project=""
+active_env=()
+cleanup() {
+  if [[ -n "$active_project" ]]; then
+    env "${active_env[@]}" docker compose -p "$active_project" down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
 for mode in sequential parallel; do
   for worker_count in "${workers[@]}"; do
+    project="transcodex-bench-${run_id}-${mode}-${worker_count}"
+    mode_offset=0
+    [[ "$mode" == "parallel" ]] && mode_offset=1000
+    api_port=$((18080 + mode_offset + (worker_count * 100)))
+    postgres_port=$((15000 + mode_offset + (worker_count * 100)))
+    redis_port=$((16000 + mode_offset + (worker_count * 100)))
+    minio_port=$((19000 + mode_offset + (worker_count * 100)))
+    minio_console_port=$((20000 + mode_offset + (worker_count * 100)))
+    active_project="$project"
+    active_env=(
+      "TRANSCODEX_API_PORT=$api_port"
+      "TRANSCODEX_POSTGRES_PORT=$postgres_port"
+      "TRANSCODEX_REDIS_PORT=$redis_port"
+      "TRANSCODEX_MINIO_PORT=$minio_port"
+      "TRANSCODEX_MINIO_CONSOLE_PORT=$minio_console_port"
+    )
+
+    WORKER_PROCESSING_MODE="$mode" env "${active_env[@]}" docker compose -p "$project" up -d --no-build --scale worker="$worker_count" api reaper worker >/dev/null
+    env "${active_env[@]}" go run ./cmd/benchmark --base-url "http://localhost:$api_port" --input "$fixture_dir/input.mp4" \
+      --jobs 1 --mode "$mode" --workers "$worker_count" --run-id "${run_id}-warmup-${mode}-${worker_count}" \
+      --timeout 10m --output /tmp/transcodex-warmup.json >/dev/null
+
     for job_count in "${jobs[@]}"; do
       for repetition in $(seq 1 "$repetitions"); do
-        project="transcodex-bench-${run_id}-${mode}-${worker_count}-${job_count}-${repetition}"
         output="$result_dir/${run_id}-${mode}-${worker_count}-${job_count}-${repetition}.json"
         markdown="$result_dir/${run_id}-${mode}-${worker_count}-${job_count}-${repetition}.md"
-        api_port=$((18080 + (worker_count * 100) + job_count + repetition))
-        postgres_port=$((15000 + (worker_count * 100) + job_count + repetition))
-        redis_port=$((16000 + (worker_count * 100) + job_count + repetition))
-        minio_port=$((19000 + (worker_count * 100) + job_count + repetition))
-        minio_console_port=$((20000 + (worker_count * 100) + job_count + repetition))
-        compose_env=(TRANSCODEX_API_PORT="$api_port" TRANSCODEX_POSTGRES_PORT="$postgres_port" TRANSCODEX_REDIS_PORT="$redis_port" TRANSCODEX_MINIO_PORT="$minio_port" TRANSCODEX_MINIO_CONSOLE_PORT="$minio_console_port")
-        WORKER_PROCESSING_MODE="$mode" env "${compose_env[@]}" docker compose -p "$project" up -d --build --scale worker="$worker_count" api reaper worker
-        env "${compose_env[@]}" go run ./cmd/benchmark --base-url "http://localhost:$api_port" --input "$fixture_dir/input.mp4" \
-          --jobs 1 --mode "$mode" --workers "$worker_count" --run-id "${run_id}-warmup-${mode}-${worker_count}-${job_count}-${repetition}" --timeout 10m --output /tmp/transcodex-warmup.json
-        env "${compose_env[@]}" go run ./cmd/benchmark --base-url "http://localhost:$api_port" --input "$fixture_dir/input.mp4" \
-          --jobs "$job_count" --mode "$mode" --workers "$worker_count" --run-id "$run_id" --output "$output" --markdown "$markdown"
-        docker compose -p "$project" down -v --remove-orphans
+        env "${active_env[@]}" go run ./cmd/benchmark --base-url "http://localhost:$api_port" --input "$fixture_dir/input.mp4" \
+          --jobs "$job_count" --mode "$mode" --workers "$worker_count" --run-id "$run_id" \
+          --output "$output" --markdown "$markdown"
       done
     done
+
+    env "${active_env[@]}" docker compose -p "$project" down -v --remove-orphans >/dev/null
+    active_project=""
+    active_env=()
   done
 done
 
-echo "Benchmark JSON reports written to $result_dir"
+"$root_dir/scripts/aggregate-benchmarks.sh" "$run_id" "$result_dir/${run_id}-summary.md"
+echo "Benchmark reports written to $result_dir for run $run_id"
