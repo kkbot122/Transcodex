@@ -124,6 +124,7 @@ Run the local benchmark harness:
 
 ```bash
 ./scripts/benchmark.sh quick
+./scripts/benchmark.sh resume
 ./scripts/benchmark.sh portfolio
 ```
 
@@ -136,7 +137,6 @@ Run the worker-crash recovery check:
 The recovery harness uses an isolated Compose project, terminates a worker after
 the job enters processing, starts a replacement worker, and verifies that the
 job completes with a second attempt and exactly one retry increment.
-```
 
 The harness builds the application images once, creates the deterministic input
 once, then reuses one isolated Compose stack for every repetition within a
@@ -152,8 +152,11 @@ directory. `scripts/aggregate-benchmarks.sh RUN_ID` creates a comparison report 
 jobs/min, sequential-versus-parallel speedup, and 1-to-2-to-4-worker scaling. The
 quick profile validates the harness with short synthetic media. The portfolio
 profile compares sequential versus parallel processing across one, two, and four
-workers using fixed 30-second 1080p inputs. Reports are machine-specific; do not
-copy their numbers into a resume until the run completes successfully.
+workers using fixed 30-second 1080p inputs. The resume profile uses the same
+30-second 1080p input and three repetitions, but limits each cell to a 25-job
+batch so it is practical to run when collecting resume evidence. Reports are
+machine-specific; do not copy their numbers into a resume until the run completes
+successfully.
 
 The processing contract is at-least-once attempt execution with at-most-once visible completion. PostgreSQL stores durable job and attempt state; Redis is a recoverable scheduling index. Renewable attempt leases and conditional transitions prevent stale workers from publishing completion after recovery.
 

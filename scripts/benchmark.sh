@@ -9,8 +9,9 @@ mkdir -p "$result_dir" "$fixture_dir"
 
 case "$profile" in
   quick) duration=5; size=1280x720; jobs=(3); workers=(1 2); repetitions=1 ;;
+  resume) duration=30; size=1920x1080; jobs=(25); workers=(1 2 4); repetitions=3 ;;
   portfolio) duration=30; size=1920x1080; jobs=(10 25 50); workers=(1 2 4); repetitions=3 ;;
-  *) echo "usage: $0 quick|portfolio" >&2; exit 2 ;;
+  *) echo "usage: $0 quick|resume|portfolio" >&2; exit 2 ;;
 esac
 
 docker compose build api reaper worker >/dev/null

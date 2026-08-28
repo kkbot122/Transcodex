@@ -10,7 +10,7 @@ shopt -s nullglob
 files=("$result_dir"/"$run_id"-sequential-*.json "$result_dir"/"$run_id"-parallel-*.json)
 
 {
-  echo "# Transcodex Portfolio Benchmark"
+  echo "# Transcodex Benchmark"
   echo
   echo "- Run: \`$run_id\`"
   echo "- Results are grouped by isolated Compose stack; warm-up runs are excluded."
